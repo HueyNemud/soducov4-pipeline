@@ -1,0 +1,36 @@
+[project]
+name = "annuaires"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "jupyter>=1.1.1",
+    "levenshtein>=0.27.3",
+    "marker-pdf>=1.10.1",
+    "matplotlib>=3.10.7",
+    "mistralai>=1.9.11",
+    "ollama>=0.6.1",
+    "pydantic>=2.0.0",
+    "pdftext>=0.6.3",
+    "protobuf>=6.33.1",
+    "pymupdf>=1.26.6",
+    "streamlit>=1.51.0",
+    "surya-ocr>=0.17.0",
+    "tqdm>=4.66.0",
+    "loguru>=0.7.3",
+    "tabulate>=0.9.0",
+    "tenacity>=9.1.2",
+    "thefuzz>=0.22.1",
+]
+
+[tool.pyright]
+# 'basic' est le mode par défaut pour Pylance
+typeCheckingMode = "basic" 
+# Indique à Pyright d'ignorer les erreurs dans le code source de NumPy, 
+# mais de valider vos annotations
+stubPath = "typings"
+
+[project.scripts]
+# Installs a `soduco` console script that dispatches to `cli.soduco:main`
+soduco = "cli.soduco:main"

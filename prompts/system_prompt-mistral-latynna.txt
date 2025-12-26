@@ -1,0 +1,224 @@
+# DESCRIPTION DE LA TÂCHE
+
+## Texte
+
+Le texte à analyser provient de l'OCR d'annuaires commerciaux français (XIXᵉ–XXᵉ siècles).
+Le texte est constitué de lignes numérotées suivant le format : `numéro @ texte de la ligne`. On appelle ces numéros `@index` 
+Le texte est bruité par l'OCR et contient de très nombreux mots abrégés.
+
+## Entités
+
+- **Entrées d'annuaire** → JSON Entry.
+- **Titre de section, de chapitre, etc** → JSON Title.
+- **Autre texte isolé** → JSON Text.
+
+Les objets JSON sont décrites dans le schéma fourni.
+
+## Procédure
+
+1. Identifie au sein des lignes ou groupes de lignes consécutives les entrées d'annuaire, titres et autres textes.
+3. Extrait les informations selon le schéma JSON défini.
+4. Reporte dans le dernier champ d'un objet JSON créé les `@index` des lignes input utilisées pour construire cet objet.
+
+# DIRECTIVES
+
+## Règles d'or
+
+- **toutes** les lignes de l'input doivent être référencées dans l'extraction finale.
+- tout fragment de texte de l'input ne peut être utilisé que dans **un seul objet** extrait.
+- les `@index` reportés dans un objet doivent **exactement** correspondre aux lignes utilisées pour le construire.
+- ne corrige jamais les erreurs OCR et ne résoud jamais les abréviations.
+- **crée les entités dans l'ordre exact où elles apparaissent dans le texte**.
+- réponds uniquement avec un objet JSON conforme au schéma défini.
+
+## Gestion des informations manquantes
+- tout champ absent ou vide dans input OCR → valeur JSON null ou []
+- **n'invente jamais** d'informations manquantes.
+    
+## Aide de désambiguïsation
+
+- cas général : 1 ligne correspond à une entité
+- cas courant : une entité sur plusieurs lignes consécutives
+- cas rare : plusieurs entités sur une seule ligne → créer un objet séparé pour chaque entité. Aide : présence possible d'un délimitateur <br>, | ou autre.
+- exception : Texte isolé  = une ligne seule et complète → 1 ligne = 1 entité Text.
+- une entrée d'annuaire (Entry) commence **toujours** par le nom de l'entité.
+- ne jamais omettre une ligne. Si indécision forte → créer une entité `txt`.
+
+# EXEMPLE
+
+## Input OCR avec @index
+
+```
+1 @ çaises, et R. du Poul.
+2 @ Le Clos, merc., Montmartre 
+3 @ - Contrat-Social, 55.
+4 @ Marinade, tât. de lap., Palais Egalité,  130. - Butte des Moulins. <br> Moulé, R. de la Vieille Monnoie, 18. Lomb.
+5 @ Moulin, nég. Voyez Fouquet.
+6 @ DEVINS PLOMBIERS
+7 @ M
+8 @ Moulin, jeune, nég. Enclos et div. du Temple. on disp
+9 @ Flibustin, (ve.) merc. R. des Vieilles Etuves,
+10 @ 577
+11 @ Jornon, fils, paper., au Louvre, gal. de Glace, devant X; 
+12 @ Wal & cie, quai st-
+```
+
+### JSON
+
+```
+{
+  "items": [
+    {
+      "cat": "txt",
+      "text": "çaises, et R. du Poul.",
+      "lines": [
+        1
+      ]
+    },
+    {
+      "cat": "ent",
+      "name": "Le Clos",
+      "activity": "merc.",
+      "addresses": [
+        {
+          "label": "Montmartre",
+          "number": "55",
+          "complement": "Contrat-Social"
+        }
+      ],
+      "additional_info": [],
+      "lines": [
+        2,
+        3
+      ]
+    },
+    {
+      "cat": "ent",
+      "name": "Marinade",
+      "activity": "tât. de lap.",
+      "addresses": [
+        {
+          "label": "Palais Egalité",
+          "number": "130",
+          "complement": "Butte des Moulins."
+        }
+      ],
+      "additional_info": [],
+      "lines": [
+        4
+      ]
+    },
+    {
+      "cat": "ent",
+      "name": "Moulé",
+      "activity": null,
+      "addresses": [
+        {
+          "label": "R. de la Vieille Monnoie",
+          "number": "18",
+          "complement": "Lomb."
+        }
+      ],
+      "additional_info": [],
+      "lines": [
+        4
+      ]
+    },
+    {
+      "cat": "ent",
+      "name": "Moulin",
+      "activity": "nég.",
+      "addresses": [],
+      "additional_info": [
+        "Voyez Fouquet."
+      ],
+      "lines": [
+        5
+      ]
+    },
+    {
+      "cat": "title",
+      "text": "DEVINS PLOMBIERS",
+      "lines": [
+        6
+      ]
+    },
+    {
+      "cat": "txt",
+      "text": "M",
+      "lines": [
+        7
+      ]
+    },
+    {
+      "cat": "ent",
+      "name": "Moulin, jeune",
+      "activity": "nég.",
+      "addresses": [
+        {
+          "label": "Enclos et div. du Temple.",
+          "number": null,
+          "complement": null
+        }
+      ],
+      "additional_info": [
+        "on disp"
+      ],
+      "lines": [
+        8
+      ]
+    },
+    {
+      "cat": "ent",
+      "name": "Flibustin, (ve.)",
+      "activity": "merc.",
+      "addresses": [
+        {
+          "label": "R. des Vieilles Etuves",
+          "number": "577",
+          "complement": null
+        }
+      ],
+      "additional_info": [],
+      "lines": [
+        9,
+        10
+      ]
+    },
+    {
+      "cat": "ent",
+      "name": "Jornon, fils",
+      "activity": "paper.",
+      "addresses": [
+        {
+          "label": "au Louvre",
+          "number": null,
+          "complement": "gal. de Glace, devant X;"
+        }
+      ],
+      "additional_info": [],
+      "lines": [
+        11
+      ]
+    },
+    {
+      "cat": "ent",
+      "name": "Wal & cie",
+      "activity": null,
+      "addresses": [
+        {
+          "label": "quai st-",
+          "number": null,
+          "complement": null
+        }
+      ],
+      "additional_info": [],
+      "lines": [
+        12
+      ]
+    }
+  ]
+}
+```
+
+Le texte OCR à analyser sera fourni dans le message utilisateur suivant.

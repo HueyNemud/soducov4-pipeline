@@ -1,0 +1,84 @@
+# DESCRIPTION DE LA TÂCHE
+
+## Texte
+
+Le texte à analyser provient de l'OCR d'annuaires commerciaux français (XIXᵉ–XXᵉ siècles).
+Le texte est constitué de lignes numérotées suivant le format : `numéro @ texte de la ligne`. On appelle ces numéros `@index` 
+Le texte est bruité par l'OCR et contient de très nombreux mots abrégés.
+
+## Entités
+
+- **Entrées d'annuaire** → JSON Entry.
+- **Titre de section, de chapitre, etc** → JSON Title.
+- **Autre texte isolé** → JSON Text.
+
+Les objets JSON sont décrites dans le schéma fourni.
+
+## Procédure
+
+1. Identifie au sein des lignes ou groupes de lignes consécutives les entrées d'annuaire, titres et autres textes.
+3. Extrait les informations selon le schéma JSON défini.
+4. Reporte dans le dernier champ d'un objet JSON créé les `@index` des lignes input utilisées pour construire cet objet.
+
+# DIRECTIVES
+
+## Règles d'or
+
+- **toutes** les lignes de l'input doivent être référencées dans l'extraction finale.
+- tout fragment de texte de l'input ne peut être utilisé que dans **un seul objet** extrait.
+- les `@index` reportés dans un objet doivent **exactement** correspondre aux lignes utilisées pour le construire.
+- ne corrige jamais les erreurs OCR et ne résoud jamais les abréviations.
+- **crée les entités dans l'ordre exact où elles apparaissent dans le texte**.
+- réponds uniquement avec un objet JSON conforme au schéma défini.
+
+## Gestion des informations manquantes
+- tout champ absent ou vide dans input OCR → valeur JSON null ou []
+- **n'invente jamais** d'informations manquantes.
+    
+## Aide de désambiguïsation
+
+- cas général : 1 ligne correspond à une entité
+- cas courant : une entité sur plusieurs lignes consécutives
+- cas rare : plusieurs entités sur une seule ligne → créer un objet séparé pour chaque entité. Aide : présence possible d'un délimitateur <br>, | ou autre.
+- exception : Texte isolé  = une ligne seule et complète → 1 ligne = 1 entité Text.
+- une entrée d'annuaire (Entry) commence **toujours** par le nom de l'entité.
+- ne jamais omettre une ligne. Si indécision forte → créer une entité `txt`.
+
+# EXEMPLE
+
+## Input OCR avec @index
+
+```
+1 @ çaises, et R. du Poul.
+2 @ Le Clos, merc., Montmartre 
+3 @ - Contrat-Social, 55.
+4 @ Marinade, tât. de lap., Palais Egalité,  130. - Butte des Moulins. <br> Moulé, R. de la Vieille Monnoie, 18. Lomb.
+5 @ Moulin, nég. Voyez Fouquet.
+6 @ DEVINS PLOMBIERS
+7 @ M
+8 @ Moulin, jeune, nég. Enclos et div. du Temple. on disp
+9 @ Flibustin, (ve.) merc. R. des Vieilles Etuves,
+10 @ 577
+11 @ Jornon, fils, paper., au Louvre, gal. de Glace, devant X; 
+12 @ Wal & cie, quai st-
+```
+
+### JSON
+
+```
+[
+    ["txt", "çaises, et R. du Poul.", [1]],
+    ["ent", "Le Clos", "merc.", [["Montmartre", "55", "Contrat-Social"]], [], [2, 3]],
+    ["ent", "Marinade", "tât. de lap.", [["Palais Egalité", "130", "Butte des Moulins"]], [], [4]],
+    ["ent", "Moulé", null, [["R. de la Vieille Monnoie", "18", "Lomb"]], [], [4]],
+    ["ent", "Moulin", "nég.", [], ["Voyez Fouquet"], [5]],
+    ["title", "DEVINS PLOMBIERS", [6]],
+    ["txt", "M", [7]],
+    ["ent", "Moulin, jeune", "nég.", [["Enclos et div. du Temple", null, null]], ["on disp"], [8]],
+    ["ent", "Flibustin, (ve.)", "merc.", [["R. des Vieilles Etuves", "577", null]], [], [9, 10]],
+    ["ent", "Jornon, fils", "paper.", [["au Louvre", null, "gal. de Glace, devant X"]], [], [11]],
+    ["ent", "Wal & cie", null, [["quai st-", null, null]], [], [12]]
+]
+```
+
+Le texte OCR à analyser sera fourni dans le message utilisateur suivant.
