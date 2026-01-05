@@ -139,7 +139,7 @@ Les objets JSON sont décrites dans le schéma fourni.
         8
       ]
     },
-    {{
+    {
       "cat": "ent",
       "name": "Préfecture",
       "activity": null,
