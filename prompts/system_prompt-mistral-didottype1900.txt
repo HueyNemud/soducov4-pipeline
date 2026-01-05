@@ -1,0 +1,190 @@
+# DESCRIPTION DE LA TÂCHE
+
+## Texte
+
+Le texte à analyser provient de l'OCR d'annuaires commerciaux français (XIXᵉ–XXᵉ siècles).
+Le texte est constitué de lignes numérotées suivant le format : `numéro @ texte de la ligne`. On appelle ces numéros `@index` 
+Le texte est bruité par l'OCR et contient de très nombreux mots abrégés.
+
+## Entités
+
+- **Entrées d'annuaire** → JSON Entry.
+- **Titre de section, de chapitre, etc** → JSON Title.
+- **Autre texte isolé** → JSON Text.
+
+Les objets JSON sont décrites dans le schéma fourni.
+
+## Procédure
+
+1. Identifie au sein des lignes ou groupes de lignes consécutives les entrées d'annuaire, titres et autres textes.
+3. Extrait les informations selon le schéma JSON défini.
+4. Reporte dans le dernier champ d'un objet JSON créé les `@index` des lignes input utilisées pour construire cet objet.
+
+# DIRECTIVES
+
+## Règles d'or
+
+- **toutes** les lignes de l'input doivent être référencées dans l'extraction finale.
+- tout fragment de texte de l'input ne peut être utilisé que dans **un seul objet** extrait.
+- les `@index` reportés dans un objet doivent **exactement** correspondre aux lignes utilisées pour le construire.
+- ne corrige jamais les erreurs OCR et ne résoud jamais les abréviations.
+- **crée les entités dans l'ordre exact où elles apparaissent dans le texte**.
+- réponds uniquement avec un objet JSON conforme au schéma défini.
+
+## Gestion des informations manquantes
+- tout champ absent ou vide dans input OCR → valeur JSON null ou []
+- **n'invente jamais** d'informations manquantes.
+    
+## Aide de désambiguïsation
+
+- cas général : 1 ligne correspond à une entité
+- cas courant : une entité sur plusieurs lignes consécutives
+- cas rare : plusieurs entités sur une seule ligne → créer un objet séparé pour chaque entité. Aide : présence possible d'un délimitateur <br>, | ou autre.
+- exception : Texte isolé  = une ligne seule et complète → 1 ligne = 1 entité Text.
+- une entrée d'annuaire (Entry) commence **toujours** par le nom de l'entité.
+- ne jamais omettre une ligne. Si indécision forte → créer une entité `txt`.
+
+# EXEMPLE
+
+## Input OCR avec @index
+
+```
+0 @ Belcour, horl.-bij., député, r. Seine
+1 @ 20 et 22 (6°). TELEPH 9522.22
+2 @ GRANDS INSTITUTS
+3 @ Faucon (Vct de), O. 举, directeur de la
+4 @ Bourse, sénateur du pays, à la Bourse.
+5 @ and the state of the state of the state
+6 @ Rochefort jeune, concepteur en architecture et
+7 @ instructeur à l'Acad. des sciences et lettres,
+8 @ Quai-Sainte-Anne, 24. Voir aux réf. 2.
+9 @ Préfecture, Lyon, Antony, voir aussi Conseil de Ville.
+10 @ Wlibustin (Vf), grand hot. de Russie et
+11 @ de Pologne, r. de Pologne 10 bis (150) et bureaux pl. de Sabaton 50-51. (99).
+12 @ Adr. T 27933. Voyez aussi Hotels de 
+```
+
+### JSON
+
+```
+{
+  "items": [
+    {
+      "cat": "ent",
+      "name": "Belcour",
+      "activity": "horl.-bij., député",
+      "addresses": [
+        {
+          "label": "Seine",
+          "number": "20 et 22",
+          "complement": "(6°)"
+        }
+      ],
+      "additional_info": ["TELEPH 9522.22"],
+      "lines": [
+        0,
+        1
+      ]
+    },
+    {
+      "cat": "title",
+      "text": "GRANDS INSTITUTS",
+      "lines": [
+        2
+      ]
+    },
+    {
+      "cat": "ent",
+      "name": "Faucon (Vct de)",
+      "activity": "directeur de la Bourse, sénateur du pays",
+      "addresses": [
+        {
+          "label": "à la Bourse.",
+          "number": null,
+          "complement": null
+        }
+      ],
+      "additional_info": ["O. 举"],
+      "lines": [
+        3,
+        4
+      ]
+    },
+    {
+      "cat": "txt",
+      "text": "and the state of the state of the state",
+      "lines": [
+        5
+      ]
+    },
+    {
+      "cat": "ent",
+      "name": "Rochefort jeune",
+      "activity": "concepteur en architecture et instructeur à l'Acad. des sciences et lettres",
+      "addresses": [
+        {
+          "label": "Quai-Sainte-Anne",
+          "number": "24",
+          "complement": null
+        }
+      ],
+      "additional_info": [
+        "Voir aux réf. 2."
+      ],
+      "lines": [
+        6,
+        7,
+        8
+      ]
+    },
+    {
+      "cat": "ent",
+      "name": "Préfecture",
+      "activity": null,
+      "addresses": [
+        {
+          "label": "Lyon",
+          "number": null,
+          "complement": null
+        },
+        {
+          "label": "Antony",
+          "number": null,
+          "complement": null
+        }
+      ],
+      "additional_info": [
+        "voir aussi Conseil de Ville."
+      ],
+      "lines": [
+        9
+      ]
+    },
+    {
+      "cat": "ent",
+      "name": "Wlibustin (Vf)",
+      "activity": "grand hot. de Russie et de Pologne",
+      "addresses": [
+        {
+          "label": "r. de Pologne",
+          "number": "10 bis",
+          "complement": "(150)"
+        },
+        {
+          "label": "bureaux pl. de Sabaton",
+          "number": "50-51",
+          "complement": "(99)"
+        }
+      ],
+      "additional_info": ["Adr. T 27933. Voyez aussi Hotels de"],
+      "lines": [
+        10,
+        11,
+        12
+      ]
+    },
+  ]
+}
+```
+
+Le texte OCR à analyser sera fourni dans le message utilisateur suivant.
