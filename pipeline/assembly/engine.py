@@ -48,23 +48,17 @@ class Assembler:
         chunk: Chunk,
         structured: Structured,
         strict: bool,
+        with_margin: bool = True,
     ) -> RichStructured:
-        # Crée un counter qui compte le nombre de fois que chaque ligne du chunk est utilisée dans les items extraits
-        # coverage = {
-        #     i: Counter(
-        #         chain.from_iterable([item.lines for item in structured.items])
-        #     ).get(i, 0)
-        #     for i, _ in enumerate(chunk)
-        # }
-
-        # # Tests :
-        # # - Est-ce que toutes les lignes du chunk sont bien couvertes ?
-        # uncovered_lines = [i for i, count in coverage.items() if count == 0]
-        # if uncovered_lines:
-        #     logger.warning(f"Chunk has uncovered lines: {uncovered_lines}")
         rich_items = []
-        for item in structured.items:
+        for ix, item in enumerate(structured.items):
 
+            # A first Entry with no 'name' is likely an artifact from chunking.
+            # It should be covered by the "margin" lines.
+            if with_margin and item.cat == 'ent' and ix == 0 and not item.name:
+                logger.debug(f"Skipping beginning item of type Entry {ix} : {item} as likely chunking artifact.")
+                continue
+            
             # Safe line resolution
             lines = []
             for i in item.lines:
@@ -81,7 +75,7 @@ class Assembler:
                         )
 
             # Ignore full "margin" items.
-            if all(line.is_margin for line in lines):
+            if with_margin and all(line.is_margin for line in lines):
                 continue
 
             raw_text = "\n".join([line.text for line in lines]).strip()

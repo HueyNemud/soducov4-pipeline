@@ -76,7 +76,7 @@ class MistralEngine:
     def process_multiple(
         self,
         chunks: Iterable[Chunk],
-        max_concurrent: int = 10,
+        max_concurrent: int = 20,
         delay_seconds: float = 3.0,
     ) -> Iterator[Structured]:
         """

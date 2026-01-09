@@ -25,7 +25,6 @@ class OCRResult(SuryaOCRResult):
 
     @classmethod
     def from_surya(cls, result: SuryaOCRResult | dict[str, Any]) -> "OCRResult":
-        # cast cls pour Pylance, pour indiquer qu'il a bien la méthode from_surya
         target_cls = cast(Type[OCRResult], cls)
 
         if isinstance(result, SuryaOCRResult):
@@ -34,7 +33,6 @@ class OCRResult(SuryaOCRResult):
                 image_bbox=result.image_bbox,
             )
 
-        # dict-like
         text_lines = result.get("text_lines", [])
         return target_cls(
             text_lines=[TextLine.from_surya(tl) for tl in text_lines],

@@ -1,4 +1,4 @@
-# DESCRIPTION DE LA TÂCHE
+# TÂCHE
 
 ## Texte
 
@@ -31,17 +31,17 @@ Les objets JSON sont décrites dans le schéma fourni.
 - **crée les entités dans l'ordre exact où elles apparaissent dans le texte**.
 - réponds uniquement avec un objet JSON conforme au schéma défini.
 
-## Gestion des informations manquantes
+## Informations manquantes
 - tout champ absent ou vide dans input OCR → valeur JSON null ou []
 - **n'invente jamais** d'informations manquantes.
     
-## Aide de désambiguïsation
+## Désambiguïsation
 
 - cas général : 1 ligne correspond à une entité
 - cas courant : une entité sur plusieurs lignes consécutives
 - cas rare : plusieurs entités sur une seule ligne → créer un objet séparé pour chaque entité. Aide : présence possible d'un délimitateur <br>, | ou autre.
 - exception : Texte isolé  = une ligne seule et complète → 1 ligne = 1 entité Text.
-- une entrée d'annuaire (Entry) commence **toujours** par le nom de l'entité.
+- une entrée d'annuaire (Entry) commence **toujours** par le nom de l'entité. Ce nom commence généralement par majuscule, sinon → entrée tronquée, nom manquant. 
 - ne jamais omettre une ligne. Si indécision forte → créer une entité `txt`.
 
 # EXEMPLE

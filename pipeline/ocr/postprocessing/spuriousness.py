@@ -6,7 +6,7 @@ from pipeline.ocr.schemas import OCRDocument
 
 class Scorer:
     def __init__(self, min_chars: int = 10) -> None:
-        self.min_chars = min_chars  # Seuil minimum de caractères
+        self.min_chars = min_chars
 
     def compute_and_assign(self, doc: OCRDocument) -> None:
         for page in doc.ocr:
@@ -17,10 +17,10 @@ class Scorer:
 
     def compute(self, text_lines: list[str]) -> np.ndarray:
         n = len(text_lines)
+
         if n == 0:
             return np.array([])
 
-        # Longueurs des lignes
         lengths = np.array([len(line.strip()) for line in text_lines])
 
         # ---------------------------
@@ -50,9 +50,6 @@ class Scorer:
         mask = (lengths > 0) & (lengths < threshold_low)
         intrinsic[mask] = 1.0 - (lengths[mask] / threshold_low)
 
-        # intrinsic = self._apply_incremental_penalty(intrinsic)
-        # return intrinsic
-
         # Smoothing ciblé
         scores = np.zeros(n)
 
@@ -76,25 +73,8 @@ class Scorer:
         for i in range(len(penalized)):
             if penalized[i] > 0:
                 run_length += 1
-                # pénalité incrémentale bornée
                 penalized[i] = 1 - (1 - penalized[i]) ** run_length
             else:
                 run_length = 0
 
         return penalized
-
-
-if __name__ == "__main__":
-    # Exemple d'utilisation
-    lines = [
-        "Negocians, Marchands et Courtiers.",
-        "10",
-        "Bar, épicier, R. du Foin, 306. - Thermes.",
-        "Bar, Md. de meubles, R. St. Honoré, 1352. - Butte des Moul.",
-    ]
-
-    scorer = Scorer()
-    scores = scorer.compute(lines)
-
-    for line, score in zip(lines, scores):
-        print(f"Line: {line!r}, Spuriousness Score: {score:.4f}")

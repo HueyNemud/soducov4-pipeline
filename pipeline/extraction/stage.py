@@ -92,5 +92,5 @@ def chunk_to_numbered_text(chunk: Chunk) -> str:
     lines: list[str] = []
     for i, line in enumerate(chunk):
         lines.append(f"{i} @ {line.text}")
-
+        
     return "\n".join(lines)

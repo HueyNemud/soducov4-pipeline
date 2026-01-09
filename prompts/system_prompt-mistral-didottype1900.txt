@@ -1,4 +1,4 @@
-# DESCRIPTION DE LA TÂCHE
+# TÂCHE
 
 ## Texte
 
@@ -31,17 +31,17 @@ Les objets JSON sont décrites dans le schéma fourni.
 - **crée les entités dans l'ordre exact où elles apparaissent dans le texte**.
 - réponds uniquement avec un objet JSON conforme au schéma défini.
 
-## Gestion des informations manquantes
+## Informations manquantes
 - tout champ absent ou vide dans input OCR → valeur JSON null ou []
 - **n'invente jamais** d'informations manquantes.
     
-## Aide de désambiguïsation
+## Désambiguïsation
 
 - cas général : 1 ligne correspond à une entité
 - cas courant : une entité sur plusieurs lignes consécutives
 - cas rare : plusieurs entités sur une seule ligne → créer un objet séparé pour chaque entité. Aide : présence possible d'un délimitateur <br>, | ou autre.
 - exception : Texte isolé  = une ligne seule et complète → 1 ligne = 1 entité Text.
-- une entrée d'annuaire (Entry) commence **toujours** par le nom de l'entité.
+- une entrée d'annuaire (Entry) commence **toujours** par le nom de l'entité. Ce nom commence généralement par majuscule, sinon → entrée tronquée, nom manquant. 
 - ne jamais omettre une ligne. Si indécision forte → créer une entité `txt`.
 
 # EXEMPLE
@@ -49,11 +49,11 @@ Les objets JSON sont décrites dans le schéma fourni.
 ## Input OCR avec @index
 
 ```
-0 @ Belcour, horl.-bij., député, r. Seine
+0 @ horl.-bij., député, r. Seine
 1 @ 20 et 22 (6°). TELEPH 9522.22
 2 @ GRANDS INSTITUTS
 3 @ Faucon (Vct de), O. 举, directeur de la
-4 @ Bourse, sénateur du pays, à la Bourse.
+4 @ Bourse, sénateur du pays, à la Bourse et à Chignigneux (Groland)
 5 @ and the state of the state of the state
 6 @ Rochefort jeune, concepteur en architecture et
 7 @ instructeur à l'Acad. des sciences et lettres,
@@ -71,7 +71,7 @@ Les objets JSON sont décrites dans le schéma fourni.
   "items": [
     {
       "cat": "ent",
-      "name": "Belcour",
+      "name": null,
       "activity": "horl.-bij., député",
       "addresses": [
         {
@@ -102,6 +102,11 @@ Les objets JSON sont décrites dans le schéma fourni.
           "label": "à la Bourse.",
           "number": null,
           "complement": null
+        },
+        {
+          "label": "à Chignigneux",
+          "number": null,
+          "complement": "(Groland)"
         }
       ],
       "additional_info": ["O. 举"],
