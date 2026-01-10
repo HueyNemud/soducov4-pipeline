@@ -208,7 +208,7 @@ def compute_local_reading_order(
         end_bins = np.clip(((ends - block_x_min) / bin_size).astype(int), 0, n_bins - 1)
 
         for s, e in zip(start_bins, end_bins):
-            density[s: e + 1] += 1
+            density[s : e + 1] += 1
 
         # --- Phase 2: Column Gutter Detection ---
         # Identify occupied bins (ignoring noise/outliers via percentile)
@@ -294,12 +294,12 @@ class SuryaLayoutPostProcessor:
 
         # Box affinity parameters
         decay_factor: float = Field(
-            2.0,
+            default=2.0,
             ge=0.1,
             description="Controls how fast the affinity drops as the line moves away from the layout box.",
         )
         anchor_offset: float = Field(
-            0.20,
+            default=0.20,
             ge=0,
             le=1.0,
             description="Leading edge position (0.0 = edge, 0.5 = center). Default is 20% from edge.",
@@ -307,13 +307,13 @@ class SuryaLayoutPostProcessor:
 
         # Column detection parameters
         n_bins: int = Field(
-            400,
+            default=400,
             gt=0,
             description="Number of bins for horizontal projection histogram."
             "Higher values increase resolution but may over-segment.",
         )
         occupancy_percentile: float = Field(
-            10.0,
+            default=10.0,
             ge=0,
             le=100,
             description="Percentile threshold to determine occupied bins in column detection.",
@@ -321,7 +321,7 @@ class SuryaLayoutPostProcessor:
 
         # Filtering
         confidence_threshold: float = Field(
-            0.8,
+            default=0.8,
             ge=0,
             le=1.0,
             description="Minimum confidence for text lines to be considered reliable."
@@ -330,12 +330,12 @@ class SuryaLayoutPostProcessor:
 
         # Debugging
         debug_plots: bool = Field(
-            False,
+            default=False,
             description="Enable generation of debug plots for visual inspection."
             "Warning: will dramatically increase processing time.",
         )
         debug_dir: str = Field(
-            "./debug_plots", description="Directory to save debug plots."
+            default="./debug_plots", description="Directory to save debug plots."
         )
 
         # Global

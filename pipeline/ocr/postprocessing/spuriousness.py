@@ -27,8 +27,8 @@ class SpuriousnessScorer:
                 the adaptive threshold (e.g., 0.25 means 1/4 of the typical line).
         """
 
-        min_chars: int = Field(10, ge=1)
-        adaptive_ratio: float = Field(0.25, ge=0.0, le=1.0)
+        min_chars: int = Field(default=10, ge=1)
+        adaptive_ratio: float = Field(default=0.25, ge=0.0, le=1.0)
 
     def compute_and_assign(self, doc: OCRDocument, params: Parameters) -> None:
         """
