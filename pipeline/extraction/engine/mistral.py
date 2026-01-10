@@ -1,107 +1,135 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, Future
 import time
-from typing import Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor, Future
+from typing import Iterable, Iterator, Dict
+from pydantic import Field
+from pydantic.dataclasses import dataclass
 
 from mistralai import Mistral
+from tenacity import retry, stop_after_attempt, wait_exponential
+
 from pipeline.chunking.schemas import Chunk
 from pipeline.extraction.postprocessing import fix_lines_alignment
 from pipeline.extraction.schemas import Structured
-from pipeline.extraction.stage import chunk_to_numbered_text
-from tenacity import retry, stop_after_attempt, wait_exponential
+from pipeline.extraction.stage import format_chunk_as_numbered_lines
 from pipeline.logging import logger
 
 
-def handle_failure(retry_state):
-    # .exception() récupère l'erreur sans la lever
-    exception = retry_state.outcome.exception()
-    logger.error(f"Failed to process chunk after retries: {exception}")
-    # On relance l'exception d'origine
+def on_extraction_failure(retry_state) -> Structured:
+    """Fallback handler for failed API calls."""
+    error = retry_state.outcome.exception()
+    logger.error(f"Mistral extraction failed after multiple retries: {error}")
     return Structured(items=[])
 
 
 class MistralEngine:
-    def __init__(
-        self,
-        api_key: str,
-        model: str,
-        system_prompt: str = "",
-        *,
-        options: dict | None = None,
-    ):
+    """
+    Inference engine for Mistral AI with nested parameter management.
+    """
+
+    @dataclass
+    class Parameters:
+        """
+        Runtime parameters for the Mistral engine.
+        Matches the structure of the OCR engine parameters.
+        """
+
+        model: str = "ministral-3:14b-instruct-2512-q8_0"
+        temperature: float = 0.1
+        # Using Field for options to allow extra mistral-specific kwargs
+        options: dict = Field(default_factory=dict)
+        request_delay: float = 3.0
+        max_concurrent: int = 20
+
+    def __init__(self, api_key: str, system_prompt: str = ""):
+        """
+        Initializes the Mistral client.
+        Note: Model-specific settings are now handled via Parameters at runtime.
+        """
         self.client = Mistral(api_key=api_key)
-        self.model = model
         self.system_prompt = system_prompt
-        self.options = options or {}
 
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(min=2, max=600),
         reraise=True,
-        retry_error_callback=handle_failure,
+        retry_error_callback=on_extraction_failure,
     )
     def process_single(
-        self, chunk: Chunk, chunk_index: int | None = None
+        self,
+        chunk: Chunk,
+        params: MistralEngine.Parameters,
+        chunk_index: int | None = None,
     ) -> Structured:
-        text = chunk_to_numbered_text(chunk)
+        """
+        Processes a single chunk using the provided parameters.
+        """
+        formatted_text = format_chunk_as_numbered_lines(chunk)
+
         logger.debug(
-            "Sending request to Mistral",
-            model=self.model,
-            options=self.options,
-            text_snippet=text[:100],
-            chunk_index=chunk_index,
+            f"Invoking Mistral {params.model} (Chunk {chunk_index if chunk_index is not None else 'N/A'})",
+            temp=params.temperature,
         )
 
-        resp = self.client.chat.parse(
-            model=self.model,
+        response = self.client.chat.parse(
+            model=params.model,
             messages=[
                 {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": text},
+                {"role": "user", "content": formatted_text},
             ],
             response_format=Structured,
-            **self.options,
+            temperature=params.temperature,
+            **params.options,
         )
 
         if (
-            not resp.choices
-            or not resp.choices[0].message
-            or resp.choices[0].message.parsed is None
+            not response.choices
+            or not response.choices[0]
+            or not response.choices[0].message
+            or not response.choices[0].message.parsed
         ):
-            raise ValueError("No valid response from Mistral API")
+            raise ValueError("Mistral API returned an empty or invalid response")
 
-        result = resp.choices[0].message.parsed
-        return fix_lines_alignment(chunk, result) if result else result
+        extracted_data = response.choices[0].message.parsed
+        return fix_lines_alignment(chunk, extracted_data)
 
     def process_multiple(
         self,
         chunks: Iterable[Chunk],
-        max_concurrent: int = 20,
-        delay_seconds: float = 3.0,
+        params: MistralEngine.Parameters | None = None,
     ) -> Iterator[Structured]:
         """
-        Yield results dès qu'ils sont prêts, mais toujours dans l'ordre des chunks.
+        Concurrent execution logic using the Parameters object for configuration.
         """
-        futures: dict[int, Future] = {}
-        next_index = 0
-        last_submit = 0.0
+        p = params or self.Parameters()
+        pending_futures: Dict[int, Future] = {}
+        next_expected_index = 0
+        last_submission_time = 0.0
 
-        with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
+        with ThreadPoolExecutor(max_workers=p.max_concurrent) as executor:
             for i, chunk in enumerate(chunks):
-                # Rate limit strict
-                sleep_time = delay_seconds - (time.time() - last_submit)
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
+                # Rate limiting logic
+                elapsed = time.time() - last_submission_time
+                wait_duration = p.request_delay - elapsed
+                if wait_duration > 0:
+                    time.sleep(wait_duration)
 
-                futures[i] = executor.submit(self.process_single, chunk, chunk_index=i)
-                last_submit = time.time()
+                # We pass the params object into process_single
+                future = executor.submit(self.process_single, chunk, p, chunk_index=i)
+                pending_futures[i] = future
+                last_submission_time = time.time()
 
-                # Yield dès que possible dans l'ordre
-                while next_index in futures and futures[next_index].done():
-                    yield futures.pop(next_index).result()
-                    next_index += 1
+                while next_expected_index in pending_futures:
+                    current_future = pending_futures[next_expected_index]
+                    if not current_future.done():
+                        break
 
-            # Yield le reste
-            while next_index in futures:
-                yield futures.pop(next_index).result()
-                next_index += 1
+                    yield current_future.result()
+                    pending_futures.pop(next_expected_index)
+                    next_expected_index += 1
+
+            # Final drain
+            while next_expected_index in pending_futures:
+                yield pending_futures.pop(next_expected_index).result()
+                next_expected_index += 1

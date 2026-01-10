@@ -1,3 +1,11 @@
+"""
+Structured Data Extraction Schemas.
+
+This module defines the models for directory listings, including addresses,
+entries, titles, and free text. It provides both full and compact
+representations (RootModels) to optimize JSON payloads.
+"""
+
 from typing import (
     Annotated,
     List,
@@ -5,7 +13,7 @@ from typing import (
     Protocol,
     Literal,
     Sequence,
-    cast,
+    Union,
 )
 from typing_extensions import runtime_checkable
 from pydantic import BaseModel, Field, RootModel
@@ -13,24 +21,21 @@ from pydantic import BaseModel, Field, RootModel
 
 @runtime_checkable
 class ExpandableRootModel(Protocol):
-    """Protocol for RootModels that can be expanded to full models."""
+    """Protocol for compact models that can be expanded into full Pydantic models."""
 
     def expand(self) -> BaseModel: ...
 
 
-# ----------------------------------------------------
-# ADRESSE
-# ----------------------------------------------------
+# =============================================================================
+# ADDRESS MODELS
+# =============================================================================
 
-# Annotations de champs
 AddressLabel = Annotated[
     Optional[str], Field(description="Libellé de l'adresse: voie ou lieu")
 ]
-
 AddressNumber = Annotated[
     Optional[str], Field(description="Numéro si disponible. Situé après le label.")
 ]
-
 AddressAdditional = Annotated[
     Optional[str],
     Field(description="Informations complémentaires : quartier, bâtiment, etc."),
@@ -38,75 +43,50 @@ AddressAdditional = Annotated[
 
 
 class Address(BaseModel):
-    """Adresse de l'entité extraite."""
+    """Full representation of a geographical address."""
 
     label: AddressLabel
     number: AddressNumber
     complement: AddressAdditional
 
 
-class AddressCompact(
-    RootModel[
-        tuple[
-            AddressLabel,
-            AddressNumber,
-            AddressAdditional,
-        ]
-    ]
-):
-    """Adresse de l'entité extraite."""
+class AddressCompact(RootModel[tuple[AddressLabel, AddressNumber, AddressAdditional]]):
+    """Compact tuple-based representation of an Address."""
 
     def expand(self) -> Address:
+        """Transforms the tuple back into a structured Address object."""
         label, number, complement = self.root
-        return Address(
-            label=label,
-            number=number,
-            complement=complement,
-        )
+        return Address(label=label, number=number, complement=complement)
 
 
-# ----------------------------------------------------
-# ENTRÉE D'ANNUAIRE
-# ----------------------------------------------------
-
+# =============================================================================
+# DIRECTORY ENTRY MODELS
+# =============================================================================
 
 EntryCat = Annotated[
     Literal["ent"], Field(description="Catégorie de l'entrée d'annuaire.")
 ]
-
 EntryName = Annotated[
     Optional[str],
     Field(
-        description=(
-            "Nom de l'entrée : individu, organisation, service. "
-            "Optionnellement avec suffixe : titre, complément, détail."
-        )
+        description="Nom de l'entrée : individu, organisation, service. Optionnellement avec suffixe."
     ),
 ]
-
 EntryActivity = Annotated[
     Optional[str], Field(description="Activité ou fonction de l'entrée.")
 ]
-
 EntryAddresses = Annotated[
-    Sequence[Address],
-    Field(description="Liste des adresses associées."),
+    Sequence[Address], Field(description="Liste des adresses associées.")
 ]
-
 EntryAdditionalInfo = Annotated[
     List[str],
-    Field(
-        description=(
-            "Toute information additionnelle associée mais non assignable : renvoi, addendum, etc."
-        )
-    ),
+    Field(description="Toute information additionnelle associée mais non assignable."),
 ]
-
 EntryLines = Annotated[List[int], Field(description="Index des lignes OCR utilisées.")]
 
 
 class Entry(BaseModel):
-    """Modèle complet pour l'entrée d'annuaire."""
+    """Full representation of a directory listing entry."""
 
     cat: EntryCat
     name: EntryName
@@ -128,169 +108,125 @@ class EntryCompact(
         ]
     ]
 ):
-    """Modèle compact pour l'entrée d'annuaire."""
+    """Compact tuple-based representation of a Directory Entry."""
 
     def expand(self) -> Entry:
-        (
-            cat,
-            name,
-            activity,
-            addresses,
-            additional_info,
-            lines,
-        ) = self.root
-        if not all(
-            isinstance(addr, ExpandableRootModel) and isinstance(addr, AddressCompact)
+        """Expands the compact entry and its nested compact addresses into full models."""
+        cat, name, activity, addresses, info, lines = self.root
+
+        # Ensure nested addresses are expanded if they are in compact form
+        expanded_addresses = [
+            addr.expand() if isinstance(addr, ExpandableRootModel) else addr
             for addr in addresses
-        ):
-            raise ValueError("All addresses must be AddressCompact instances")
-        else:
-            addresses = [cast(AddressCompact, addr).expand() for addr in addresses]
+        ]
+
+        validated_addresses: EntryAddresses = [
+            Address.model_validate(a) for a in expanded_addresses
+        ]
+
         return Entry(
             cat=cat,
             name=name,
             activity=activity,
-            addresses=addresses,
-            additional_info=additional_info,
+            addresses=validated_addresses,
+            additional_info=info,
             lines=lines,
         )
 
 
-# ----------------------------------------------------
-# TITRE
-# ----------------------------------------------------
+# =============================================================================
+# TITLE & FREE TEXT MODELS
+# =============================================================================
 
 TitleCat = Annotated[
     Literal["title"], Field(description="Titre de section ou de chapitre.")
 ]
-
 TitleText = Annotated[str, Field(description="Texte du titre.")]
-
 TitleLines = Annotated[List[int], Field(description="Index des lignes OCR utilisées.")]
 
 
 class Title(BaseModel):
-    """Modèle complet pour le titre."""
+    """Full representation of a section title."""
 
     cat: TitleCat
     text: TitleText
     lines: TitleLines
 
 
-class TitleCompact(
-    RootModel[
-        tuple[
-            TitleCat,
-            TitleText,
-            TitleLines,
-        ]
-    ]
-):
-    """Modèle compact pour le titre."""
+class TitleCompact(RootModel[tuple[TitleCat, TitleText, TitleLines]]):
+    """Compact representation of a Title."""
 
     def expand(self) -> Title:
         cat, text, lines = self.root
-        return Title(
-            cat=cat,
-            text=text,
-            lines=lines,
-        )
-
-
-# ----------------------------------------------------
-# TEXTE LIBRE
-# ----------------------------------------------------
+        return Title(cat=cat, text=text, lines=lines)
 
 
 TextCat = Annotated[Literal["txt"], Field(description="Texte isolé.")]
-
 TextText = Annotated[str, Field(description="Contenu du texte.")]
-
 TextLines = Annotated[List[int], Field(description="Index de la ligne OCR utilisée.")]
 
 
 class Text(BaseModel):
-    """Modèle complet pour le texte libre."""
+    """Full representation of a free text block."""
 
     cat: TextCat
     text: TextText
     lines: TextLines
 
 
-class TextCompact(
-    RootModel[
-        tuple[
-            TextCat,
-            TextText,
-            TextLines,
-        ]
-    ]
-):
-    """Modèle compact pour le texte libre."""
+class TextCompact(RootModel[tuple[TextCat, TextText, TextLines]]):
+    """Compact representation of Free Text."""
 
     def expand(self) -> Text:
         cat, text, lines = self.root
-        return Text(
-            cat=cat,
-            text=text,
-            lines=lines,
-        )
+        return Text(cat=cat, text=text, lines=lines)
 
 
-# ----------------------------------------------------
-# STRUCTURE GENERALE
-# ----------------------------------------------------
+# =============================================================================
+# GLOBAL STRUCTURE
+# =============================================================================
 
-
-# -----------------------------
-# Union et Structure globale
-# -----------------------------
-
-StructuredItem = Entry | Title | Text
-StructuredItemCompact = EntryCompact | TitleCompact | TextCompact
+StructuredItem = Union[Entry, Title, Text]
+StructuredItemCompact = Union[EntryCompact, TitleCompact, TextCompact]
 
 
 class Structured(BaseModel):
-    items: list[StructuredItem] = Field(..., description="Liste d'items extraits.")
+    """Container for a collection of extracted items."""
+
+    items: List[StructuredItem] = Field(..., description="Liste d'items extraits.")
 
     def __iter__(self):
         return iter(self.items)
 
-    def __getitem__(self, item):
-        return self.items[item]
+    def __getitem__(self, index):
+        return self.items[index]
 
     def __len__(self):
         return len(self.items)
 
 
-class StructuredCompact(
-    RootModel[
-        tuple[
-            StructuredItemCompact,
-            ...,
-        ]
-    ]
-):
-    """Modèle compact pour la structure globale."""
+class StructuredCompact(RootModel[List[StructuredItemCompact]]):
+    """Global collection of items in compact format."""
 
     def expand(self) -> Structured:
-        expanded_items = []
-        for item in self.root:
-            if isinstance(item, ExpandableRootModel):
-                expanded_items.append(item.expand())
-            else:
-                raise ValueError("Item does not implement ExpandableRootModel")
-        return Structured(items=expanded_items)
+        """Iterates through compact items and expands each one into its full model."""
+        return Structured(
+            items=[
+                item.expand()
+                for item in self.root
+                if isinstance(item, ExpandableRootModel)
+            ]
+        )
 
 
-class StructuredSeq(RootModel[Sequence[Structured | StructuredCompact]]):
-    """Modèle pour une séquence d'items structurés."""
+class StructuredSeq(RootModel[Sequence[Union[Structured, StructuredCompact]]]):
+    """A flexible sequence containing either full or compact structured data."""
 
     def __iter__(self):
         return iter(self.root)
 
-    def __getitem__(self, item):
-        return self.root[item]
+    def __getitem__(self, index):
+        return self.root[index]
 
     def __len__(self):
         return len(self.root)

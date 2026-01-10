@@ -1,4 +1,4 @@
-from typing import Iterable, Iterator, Type, Dict, Any, Protocol
+from typing import Iterable, Iterator, Type, Dict, Any, Protocol, runtime_checkable
 
 from pipeline.chunking.schemas import Chunk
 from pipeline.extraction.schemas import Structured
@@ -6,54 +6,60 @@ from .mistral import MistralEngine
 from .ollama import OllamaEngine
 
 
-# On définit ce qu'est un Engine via un Protocol
-class Engine(Protocol):
-    def process_single(self, chunk: Chunk) -> Structured: ...
-    def process_multiple(self, chunks: Iterable[Chunk]) -> Iterator[Structured]: ...
+@runtime_checkable
+class ExtractionEngine(Protocol):
+    """
+    Protocol defining the interface for extraction backends.
+    Now supports the nested Parameters pattern.
+    """
+
+    class Parameters:
+        """Structural placeholder for engine-specific parameters."""
+
+        ...
+
+    def process_single(self, chunk: Chunk, params: Any) -> Structured:
+        """Process a single text chunk using specific runtime parameters."""
+        ...
+
+    def process_multiple(
+        self, chunks: Iterable[Chunk], params: Any | None = None
+    ) -> Iterator[Structured]:
+        """Stream multiple chunks using specific runtime parameters."""
+        ...
 
 
-# Mapping dynamique des moteurs
-ENGINE_MAP: Dict[str, Type[Engine]] = {
+# Registry mapping engine identifiers to their implementation classes
+ENGINE_REGISTRY: Dict[str, Type[Any]] = {
     "mistral": MistralEngine,
     "ollama": OllamaEngine,
 }
 
 
 def create_extraction_engine(
-    engine: str, config: Dict[str, Any], system_prompt: str = ""
-) -> Engine:
+    provider: str, system_prompt: str = "", api_key: str | None = None
+) -> ExtractionEngine:
     """
-    Factory function to create an extraction engine based on the specified name.
+    Factory function to initialize an extraction engine backend.
 
-    Args:
-        engine (str): Name of the engine, e.g., "mistral" or "ollama".
-        config (dict): Configuration dictionary for all engines.
-        system_prompt (str): Optional system prompt to initialize the engine.
-
-    Returns:
-        Engine: An instance of the requested engine implementing the Engine protocol.
-
-    Raises:
-        ValueError: If the engine name is unsupported.
+    Configuration (model, temperature, etc.) is no longer passed here,
+    but injected later via the engine's Parameters dataclass.
     """
-    engine_key = engine.lower()
-    engine_cls = ENGINE_MAP.get(engine_key)
-    if engine_cls is None:
-        raise ValueError(f"Unsupported engine: {engine}")
+    provider_key = provider.lower()
+    engine_class = ENGINE_REGISTRY.get(provider_key)
 
-    engine_cfg = config.get(engine_key, {})
+    if not engine_class:
+        raise ValueError(
+            f"Unsupported engine provider: '{provider}'. "
+            f"Available providers: {list(ENGINE_REGISTRY.keys())}"
+        )
 
-    kwargs = {
-        "model": engine_cfg.get("model", ""),
-        "system_prompt": system_prompt,
-    }
+    # Initialize the engine with its persistent state
+    if provider_key == "mistral":
+        return engine_class(api_key=api_key or "", system_prompt=system_prompt)
 
-    # Ajouter api_key si le moteur le supporte
-    if "api_key" in engine_cfg:
-        kwargs["api_key"] = engine_cfg["api_key"]
+    elif provider_key == "ollama":
+        return engine_class(system_prompt=system_prompt)
 
-    # Ajouter options si elles existent
-    if "options" in engine_cfg:
-        kwargs["options"] = engine_cfg["options"]
-
-    return engine_cls(**kwargs)
+    # Fallback for generic instantiation if signatures align
+    return engine_class(system_prompt=system_prompt)

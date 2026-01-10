@@ -1,10 +1,11 @@
 from __future__ import annotations
-from typing import Any, Iterable
+from typing import Any, Iterable, Tuple, List
 from thefuzz import fuzz
 from pydantic import BaseModel
-from pipeline.chunking.schemas import Chunk, ChunkLine
+
+from pipeline.chunking.schemas import Chunk
+from pipeline.logging import logger
 from .schemas import (
-    Address,
     EntryCompact,
     Structured,
     Entry,
@@ -13,82 +14,95 @@ from .schemas import (
     Text,
     TitleCompact,
 )
-from pipeline.logging import logger
 
 
-def fingerprint_unordered(text: str) -> str:
-    filtered = "".join(c.lower() for c in text if c.isalnum())
-    return "".join(sorted(filtered))
+def get_fuzzy_fingerprint(text: str, sort_chars: bool = False) -> str:
+    """
+    Generates a normalized alphanumeric string for fuzzy comparison.
+
+    Args:
+        text: Input string to normalize.
+        sort_chars: If True, returns characters in alphabetical order (unordered comparison).
+    """
+    chars = [char.lower() for char in text if char.isalnum()]
+    if sort_chars:
+        chars.sort()
+    return "".join(chars)
 
 
-def fingerprint_ordered(text: str) -> str:
-    return "".join(c.lower() for c in text if c.isalnum())
-
-
-def ratio_unordered(a: str, b: str) -> float:
+def calculate_unordered_ratio(text_a: str, text_b: str) -> float:
+    """Calculates similarity ratio ignoring character order."""
     return (
         fuzz.ratio(
-            fingerprint_unordered(a),
-            fingerprint_unordered(b),
+            get_fuzzy_fingerprint(text_a, sort_chars=True),
+            get_fuzzy_fingerprint(text_b, sort_chars=True),
         )
         / 100.0
     )
 
 
-def partial_directional_ratio(a: str, b: str) -> float:
-    fa = fingerprint_ordered(a)
-    fb = fingerprint_ordered(b)
-    if len(fa) > len(fb):
+def calculate_directional_partial_ratio(source: str, target: str) -> float:
+    """
+    Calculates similarity assuming 'source' should be contained within 'target'.
+    Returns 0.0 if source is longer than target.
+    """
+    fp_source = get_fuzzy_fingerprint(source)
+    fp_target = get_fuzzy_fingerprint(target)
+
+    if len(fp_source) > len(fp_target):
         return 0.0
-    return fuzz.partial_ratio(fa, fb) / 100.0
+    return fuzz.partial_ratio(fp_source, fp_target) / 100.0
 
 
 def assess_alignment(
     chunk: Chunk,
-    lines: list[int],
+    line_indices: List[int],
     entity_text: str,
     *,
     global_threshold: float,
     inclusion_threshold: float,
-) -> tuple[str, float]:
+) -> Tuple[str, float]:
     """
+    Evaluates how well an extracted entity matches the text at specific chunk lines.
+
     Returns:
-        status ∈ {"OK", "FUSION", "MISMATCH"}
-        score  ∈ [0,1]
+        A tuple of (status, score) where status is 'OK', 'FUSION', or 'MISMATCH'.
     """
+    candidate_text = get_text_from_indices(chunk, line_indices)
 
-    chunk_text = chunk_text_for_lines(chunk, lines)
+    # 1. Global unordered check (Identity)
+    score_global = calculate_unordered_ratio(entity_text, candidate_text)
+    if score_global >= global_threshold:
+        return "OK", score_global
 
-    # 1. Test global (ordre-insensible)
-    r = ratio_unordered(entity_text, chunk_text)
-    if r >= global_threshold:
-        return "OK", r
+    # 2. Sequential inclusion check (Partial match)
+    score_partial = calculate_directional_partial_ratio(entity_text, candidate_text)
+    if score_partial >= inclusion_threshold:
+        return "FUSION", score_partial
 
-    # 2. Test inclusion (ordre-sensible, directionnel)
-    r_prime = partial_directional_ratio(entity_text, chunk_text)
-    if r_prime >= inclusion_threshold:
-        return "FUSION", r_prime
-
-    return "MISMATCH", max(r, r_prime)
+    return "MISMATCH", max(score_global, score_partial)
 
 
-def find_best_local_match(
+def find_best_local_shift(
     chunk: Chunk,
-    lines: list[int],
+    line_indices: List[int],
     entity_text: str,
-    max_shift: int,
+    max_search_range: int,
     *,
     global_threshold: float,
     inclusion_threshold: float,
-) -> tuple[int, float]:
+) -> Tuple[int, float]:
+    """
+    Searches for the best line offset within a local range to improve alignment.
+    """
     best_shift = 0
     best_score = 0.0
 
-    for shift in range(-max_shift, max_shift + 1):
-        shifted = [l + shift for l in lines]
-        status, score = assess_alignment(
+    for shift in range(-max_search_range, max_search_range + 1):
+        shifted_indices = [idx + shift for idx in line_indices]
+        _, score = assess_alignment(
             chunk,
-            shifted,
+            shifted_indices,
             entity_text,
             global_threshold=global_threshold,
             inclusion_threshold=inclusion_threshold,
@@ -100,189 +114,113 @@ def find_best_local_match(
     return best_shift, best_score
 
 
-def chunk_text_for_lines(chunk: Chunk, lines: list[int]) -> str:
-    """Extract and join text from given chunk lines."""
-    r = " ".join(chunk[l].text for l in lines if 0 <= l < len(chunk)).strip()
-    return r
+def get_text_from_indices(chunk: Chunk, indices: List[int]) -> str:
+    """Concatenates text from a chunk based on a list of line indices."""
+    valid_lines = [chunk[i].text for i in indices if 0 <= i < len(chunk)]
+    return " ".join(valid_lines).strip()
 
 
-def extract_item_text(item) -> str:
-    """Get all textual content from an item."""
-
-    assert isinstance(
-        item, (Entry, Title, Text, EntryCompact, TitleCompact, TextCompact)
-    ), f"Unsupported item type: {type(item).__name__}"
-
-    return _simple_string_repr(item, exclude_fields=["cat", "lines"])
+def extract_item_full_text(item: Any) -> str:
+    """Serializes all textual fields of a Pydantic item into a single string for comparison."""
+    valid_types = (Entry, Title, Text, EntryCompact, TitleCompact, TextCompact)
+    assert isinstance(item, valid_types), f"Unsupported type: {type(item).__name__}"
+    return _recursive_string_repr(item, exclude_fields=["cat", "lines"])
 
 
-def new_item_with_lines(item, lines):
-    """Return a copy of item with updated line indices."""
+def update_item_lines(item: Any, new_indices: List[int]) -> Any:
+    """Creates a copy of the item with updated line indices."""
     if not hasattr(item, "lines"):
-        raise ValueError(f"Cannot set lines for {type(item).__name__} without 'lines'")
-    return type(item)(**item.model_dump(exclude={"lines"}), lines=lines)
+        raise ValueError(f"Object {type(item).__name__} lacks a 'lines' attribute.")
+    return type(item)(**item.model_dump(exclude={"lines"}), lines=new_indices)
 
 
 def fix_lines_alignment(
     chunk: Chunk,
-    response: Structured,
+    structured_data: Structured,
     max_lookahead: int = 3,
     global_threshold: float = 0.7,
     inclusion_threshold: float = 0.8,
 ) -> Structured:
     """
-    Recalage local des indices de lignes pour les items extraits.
+    Corrects line index drifting in extracted items by comparing LLM output with original chunk text.
+
+    This adjusts for cases where the LLM correctly extracts content but provides slightly
+    offset line numbers. It maintains a cumulative offset to guide subsequent items.
     """
+    aligned_items = []
+    cumulative_offset = 0
+    last_valid_index = len(chunk) - 1
 
-    new_items = []
-    line_offset = 0
-    max_line_index = len(chunk) - 1  # dernière ligne valide
-
-    for item in response.items:
-        if not hasattr(item, "lines"):
-            raise ValueError(
-                f"Cannot fix alignment for {type(item).__name__} without 'lines'"
-            )
-
-        # --- 1️⃣ Sanitation : ignorer les items hors chunk ---
-        if any(l < 0 or l > max_line_index for l in item.lines):
-            logger.warning(
-                f"Skipping alignment fix for item with out-of-scope lines: {item}"
-            )
-            new_items.append(item)
+    for item in structured_data.items:
+        # Safety check: bypass items with indices entirely outside the current chunk
+        if any(idx < 0 or idx > last_valid_index for idx in item.lines):
+            logger.warning(f"Skipping alignment for out-of-scope item: {item}")
+            aligned_items.append(item)
             continue
 
-        # --- 2️⃣ Appliquer l'offset cumulé existant ---
-        lines = [l + line_offset for l in item.lines]
-        item = new_item_with_lines(item, lines)
+        # Step 1: Apply current known drift
+        shifted_indices = [idx + cumulative_offset for idx in item.lines]
+        item = update_item_lines(item, shifted_indices)
+        entity_content = extract_item_full_text(item)
 
-        entity_text = extract_item_text(item)
-
-        # --- 3️⃣ Vérifier l'alignement actuel ---
-        status, score = assess_alignment(
+        # Step 2: Evaluate current alignment
+        status, current_score = assess_alignment(
             chunk,
-            lines,
-            entity_text,
+            shifted_indices,
+            entity_content,
             global_threshold=global_threshold,
             inclusion_threshold=inclusion_threshold,
         )
 
         if status in {"OK", "FUSION"}:
-            new_items.append(item)
+            aligned_items.append(item)
             continue
 
-        # --- 4️⃣ MISMATCH → recherche locale ---
-        best_shift, best_score = find_best_local_match(
+        # Step 3: Attempt local re-alignment on mismatch
+        best_shift, best_score = find_best_local_shift(
             chunk,
-            lines,
-            entity_text,
+            shifted_indices,
+            entity_content,
             max_lookahead,
             global_threshold=global_threshold,
             inclusion_threshold=inclusion_threshold,
         )
 
-        if best_score > score and best_shift != 0:
+        if best_score > current_score and best_shift != 0:
             logger.info(
-                f"Fix alignment at line {lines[0]}: shift {best_shift} "
-                f"({score:.2f} → {best_score:.2f})"
+                f"Realignment triggered at line {shifted_indices[0]}: "
+                f"shift {best_shift} (Score: {current_score:.2f} -> {best_score:.2f})"
             )
-            # appliquer le shift, cardinalité conservée
-            item = new_item_with_lines(item, [l + best_shift for l in lines])
-            line_offset += best_shift
+            final_indices = [idx + best_shift for idx in shifted_indices]
+            item = update_item_lines(item, final_indices)
+            cumulative_offset += best_shift
 
-        new_items.append(item)
+        aligned_items.append(item)
 
-    return Structured(items=new_items)
+    return Structured(items=aligned_items)
 
 
-def _simple_string_repr(
-    obj: Any, exclude_fields: list[str] | None = None, exclude_none: bool = True
+def _recursive_string_repr(
+    obj: Any, exclude_fields: List[str] | None = None, exclude_none: bool = True
 ) -> str:
+    """
+    Recursively extracts string values from complex objects (Pydantic, Iterables, Primitives).
+    Used to rebuild the 'raw' text an LLM saw from its structured output.
+    """
     exclude = set(exclude_fields or [])
 
-    # CAS 1 : C'est un modèle Pydantic
     if isinstance(obj, BaseModel):
-        parts = []
-        # On itère directement sur l'objet pour garder les types BaseModel intacts
-        for name, value in obj:
-            if name in exclude or (value is None and exclude_none):
-                continue
-            parts.append(_simple_string_repr(value, exclude_fields, exclude_none))
-        return " ".join(p for p in parts if p.strip())
-
-    # CAS 2 : C'est une liste ou un tuple (itérable mais pas une string)
-    elif isinstance(obj, Iterable) and not isinstance(obj, (str, bytes)):
-        parts = [
-            _simple_string_repr(item, exclude_fields, exclude_none) for item in obj
+        field_values = [
+            _recursive_string_repr(val, exclude_fields, exclude_none)
+            for name, val in obj
+            if name not in exclude and not (val is None and exclude_none)
         ]
-        return " ".join(p for p in parts if p.strip())
+        return " ".join(v for v in field_values if v.strip())
 
-    # CAS 3 : Valeur simple (str, int, etc.)
+    elif isinstance(obj, Iterable) and not isinstance(obj, (str, bytes)):
+        item_values = [
+            _recursive_string_repr(item, exclude_fields, exclude_none) for item in obj
+        ]
+        return " ".join(v for v in item_values if v.strip())
+
     return str(obj) if obj is not None else ""
-
-# def test_fix_lines_alignment_scope_only():
-#     """Test fix_lines_alignment: only verifies local line alignment, not content correctness."""
-
-#     # --- 1️⃣ Chunk simulé ---
-#     chunk = Chunk(
-#         root=[
-#             ChunkLine(page=1, line=0, text="ANNUAIRE DES PROFESSIONNELS"),
-#             ChunkLine(page=1, line=1, text="A, rap., Louvre"),
-#             ChunkLine(page=1, line=2, text="40"),
-#             ChunkLine(page=1, line=3, text="ODO"),
-#             ChunkLine(page=1, line=4, text="B, per., Paris"),
-#             ChunkLine(page=1, line=5, text="C, koe., 75001 <br> D, xyz., Rouen sur Rrr"),
-#             ChunkLine(page=1, line=6, text="NOTE: Informations non contractuelles"),
-#             ChunkLine(page=2, line=0, text="E, foo., Lyon"),
-#             ChunkLine(page=2, line=1, text="42"),
-#             ChunkLine(page=2, line=2, text="TITRE DE LA PAGE SUIVANTE"),
-#         ]
-#     )
-
-#     # --- 2️⃣ Items extraits par le LLM (avec bruit / hallucinations) ---
-#     response = Structured(
-#         items=[
-#             Title(cat="title", text="ANNUAIRE DES PROFESSIONNELS", lines=[0]),
-#             Entry(cat="ent", name="A", activity="rap.", addresses=[Address(label="Louvre", number="40", complement=None)], additional_info=[], lines=[1,2]),
-#             Text(cat="txt", text="ODO", lines=[3,4]),
-#             Entry(cat="ent", name="B", activity="per.", addresses=[Address(label="Paris", number=None, complement=None)], additional_info=[], lines=[2,3]),
-#             Entry(cat="ent", name="C", activity="koe.", addresses=[Address(label="75001", number=None, complement=None)], additional_info=[], lines=[5,6]),
-#             Entry(cat="ent", name="D", activity="xyz.", addresses=[Address(label="Rouen sur Rrr", number=None, complement=None)], additional_info=[], lines=[10,11]),  # hors chunk
-#             Text(cat="txt", text="Lorem ipsum dolor sit amet", lines=[7]),
-#             Entry(cat="ent", name="E", activity="foo.", addresses=[Address(label="Lyon", number='42', complement=None)], additional_info=[], lines=[7]),
-#             Title(cat="title", text="TITRE DE LA PAGE SUIVANTE", lines=[100]),  # hors chunk
-#         ]
-#     )
-
-#     # --- 3️⃣ Appliquer la correction ---
-#     fixed = fix_lines_alignment(chunk, response, max_lookahead=2)
-
-#     max_line_index = len(chunk) - 1
-
-#     # --- 4️⃣ Vérifications des invariants ---
-#     for before, after in zip(response.items, fixed.items):
-#         # 4a. Cardinalité conservée
-#         assert len(after.lines) == len(before.lines), f"Cardinality changed for {before}"
-
-#         # 4b. Décalage uniforme pour les items recalés
-#         offsets = [a - b for a, b in zip(after.lines, before.lines)]
-#         if any(offsets):
-#             # tous les décalages doivent être identiques
-#             assert len(set(offsets)) == 1, f"Non-uniform line shift for {before}"
-
-#         # 4c. Items hors chunk restent inchangés
-#         if any(l < 0 or l > max_line_index for l in before.lines):
-#             assert after.lines == before.lines, f"Lines outside chunk modified for {before}"
-
-#         # 4d. Items valides doivent rester dans le chunk
-#         else:
-#             assert all(0 <= l <= max_line_index for l in after.lines), f"Shifted lines out of chunk for {before}"
-
-#     # --- 5️⃣ Affichage pour debug (optionnel) ---
-#     print("=== Items after fixing (scope-only) ===")
-#     for item in fixed.items:
-#         print(item)
-
-
-# # Exécuter le test
-# test_fix_lines_alignment_scope_only()
