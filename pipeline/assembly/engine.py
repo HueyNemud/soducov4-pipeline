@@ -1,106 +1,141 @@
 from typing import Iterator
+from thefuzz import fuzz
+
 from pipeline.assembly.schemas import RichItem, RichStructured
 from pipeline.chunking.schemas import Chunk, Chunks
-from pipeline.extraction.postprocessing import _simple_string_repr
+from pipeline.extraction.postprocessing import _recursive_string_repr
 from pipeline.extraction.schemas import (
     Structured,
     StructuredCompact,
     StructuredSeq,
 )
 from pipeline.ocr.schemas import OCRDocument
-from thefuzz import fuzz
 from pipeline.logging import logger
 
 
 class Assembler:
+    """
+    Reconstructs rich document structures by mapping LLM-extracted data
+    back to original OCR geometric information and source text.
+    """
 
     def assemble_multiple(
         self,
-        ocr: OCRDocument,
+        ocr_doc: OCRDocument,
         chunks: Chunks,
-        structuredseq: StructuredSeq,
-        strict: bool,
+        structured_sequence: StructuredSeq,
+        strict_mode: bool = False,
     ) -> Iterator[RichStructured]:
-        if len(chunks) < len(structuredseq):
+        """
+        Processes a sequence of chunks and their corresponding extractions.
+
+        Args:
+            ocr_doc: The source OCR document containing geometric bounding boxes.
+            chunks: The list of text chunks used for extraction.
+            structured_sequence: The structured objects returned by the LLM.
+            strict_mode: If True, raises errors on line index mismatches.
+        """
+        if len(chunks) < len(structured_sequence):
             raise ValueError(
-                "Number of chunks and structured items must be the same for assembly."
-            )
-        elif len(chunks) > len(structuredseq):
-            logger.error(
-                "More chunks than structured items; some chunks will be ignored during assembly."
+                "Mismatched sequence: More extractions than source chunks."
             )
 
-        for chunk, struct in zip(chunks, structuredseq):
-            s: Structured = (
-                struct.expand() if isinstance(struct, StructuredCompact) else struct
+        if len(chunks) > len(structured_sequence):
+            logger.error(
+                "Mismatched sequence: Some chunks lack corresponding extractions."
+            )
+
+        for chunk, extraction in zip(chunks, structured_sequence):
+            # Ensure we are working with expanded schemas
+            full_struct = (
+                extraction.expand()
+                if isinstance(extraction, StructuredCompact)
+                else extraction
             )
 
             yield self.assemble_single(
-                ocr=ocr,
+                ocr_doc=ocr_doc,
                 chunk=chunk,
-                structured=s,
-                strict=strict,
+                structured=full_struct,
+                strict_mode=strict_mode,
             )
 
     def assemble_single(
         self,
-        ocr: OCRDocument,
+        ocr_doc: OCRDocument,
         chunk: Chunk,
         structured: Structured,
-        strict: bool,
-        with_margin: bool = True,
+        strict_mode: bool = False,
+        skip_artifacts: bool = True,
     ) -> RichStructured:
+        """
+        Maps a single structured extraction to its physical OCR location and raw text.
+
+        Args:
+            ocr_doc: Source OCR data for bounding box retrieval.
+            chunk: The specific text chunk containing line metadata.
+            structured: The LLM extraction for this chunk.
+            strict_mode: Whether to fail on out-of-bounds line indices.
+            skip_artifacts: If True, filters out margin lines and chunking noise.
+        """
         rich_items = []
-        for ix, item in enumerate(structured.items):
 
-            # A first Entry with no 'name' is likely an artifact from chunking.
-            # It should be covered by the "margin" lines.
-            if with_margin and item.cat == 'ent' and ix == 0 and not item.name:
-                logger.debug(f"Skipping beginning item of type Entry {ix} : {item} as likely chunking artifact.")
+        for index, item in enumerate(structured.items):
+            # 1. Filter out common chunking artifacts (e.g., empty leading entries)
+            if (
+                skip_artifacts
+                and item.cat == "ent"
+                and index == 0
+                and not getattr(item, "name", None)
+            ):
+                logger.debug(
+                    f"Filtering likely chunking artifact at index {index}: {item}"
+                )
                 continue
-            
-            # Safe line resolution
-            lines = []
-            for i in item.lines:
+
+            # 2. Resolve line indices to actual ChunkLine objects
+            resolved_lines = []
+            for line_idx in item.lines:
                 try:
-                    lines.append(chunk[i])
+                    resolved_lines.append(chunk[line_idx])
                 except IndexError:
-                    if strict:
-                        raise IndexError(
-                            f"Line index {i} out of range for chunk with {len(chunk)} lines."
-                        )
-                    else:
-                        logger.error(
-                            f"Line index {i} out of range for chunk with {len(chunk)} lines. Skipping line."
-                        )
+                    msg = f"Line index {line_idx} out of range (Chunk size: {len(chunk)})."
+                    if strict_mode:
+                        raise IndexError(msg)
+                    logger.error(f"{msg} Skipping line.")
 
-            # Ignore full "margin" items.
-            if with_margin and all(line.is_margin for line in lines):
+            # 3. Ignore items that consist exclusively of margin/overlap text
+            if skip_artifacts and all(line.is_margin for line in resolved_lines):
                 continue
 
-            raw_text = "\n".join([line.text for line in lines]).strip()
-
-            item_repr = _simple_string_repr(
+            # 4. Reconstruct raw text and calculate alignment confidence
+            raw_source_text = "\n".join(line.text for line in resolved_lines).strip()
+            item_content_repr = _recursive_string_repr(
                 item, exclude_fields=["lines", "cat"]
             ).strip()
-            alignment = fuzz.ratio(item_repr, raw_text) / 100.0
 
-            if alignment < 0.50:
+            alignment_score = fuzz.ratio(item_content_repr, raw_source_text) / 100.0
+
+            if alignment_score < 0.50:
                 logger.warning(
-                    f"Low alignment ({alignment:.2f}) between extracted item and OCR text:\n"
-                    f"Extracted: >{item_repr}<\n"
-                    f"OCR Text: >{raw_text}<"
+                    f"Low alignment ({alignment_score:.2f}) for item {index}. "
+                    f"Possible hallucination or mis-mapping."
                 )
 
-            # Recupère les Bbboxes des lignes utilisées
-            bboxes = [ocr.ocr[line.page].text_lines[line.line].bbox for line in lines]
+            # 5. Fetch spatial coordinates (BBoxes) from OCR source
+            # Accessing: OCRDocument -> Page -> TextLine -> BBox
+            bboxes = [
+                ocr_doc.ocr[line.page].text_lines[line.line].bbox
+                for line in resolved_lines
+            ]
 
+            # 6. Create the enriched "Rich" version of the item
             rich_items.append(
                 RichItem.from_item(
-                    item=item,
-                    raw_text=raw_text,
-                    lines_resolved=lines,
-                    alignment=alignment,
+                    source_item=item,
+                    raw_text=raw_source_text,
+                    lines_resolved=resolved_lines,
+                    alignment=alignment_score,
                     bboxes=bboxes,
                 )
             )
