@@ -51,10 +51,10 @@ class OCR(PipelineStage[OCRDocument, OCRParameters]):
         engine = SuryaOCR()
         document = engine.process_pdf(ctx.pdf_path, params=parameters.engine)
 
-        if ctx.verbose or ctx.debug:
+        if ctx.store.verbose or ctx.store.debug:
             self._log_pages(document)
 
-        if ctx.debug:
+        if ctx.store.debug:
             self._save_page_debug_visuals(ctx, document, ctx.pdf_path)
 
         return document

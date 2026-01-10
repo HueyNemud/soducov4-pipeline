@@ -8,7 +8,7 @@ from ollama import Client
 from pipeline.chunking.schemas import Chunk
 from pipeline.extraction.postprocessing import fix_lines_alignment
 from pipeline.extraction.schemas import Structured
-from pipeline.extraction.stage import format_chunk_as_numbered_lines
+from pipeline.extraction.utils import format_chunk_as_numbered_lines
 from pipeline.logging import logger
 
 
@@ -25,16 +25,22 @@ class OllamaEngine:
         Allows fine-tuning of the local model behavior.
         """
 
-        model: str = "ministral-3:14b-instruct-2512-q8_0"
+        system_prompt: str = Field(
+            default="",
+            description="System prompt to guide the Ollama model's behavior.",
+        )
+        model: str = Field(
+            default="ministral-3:14b-instruct-2512-q8_0",
+            description="Ollama model name to use for extraction.",
+        )
         # Options dict for Ollama-specific runner settings (num_ctx, temperature, etc.)
         options: dict[str, Any] = Field(default_factory=dict)
 
-    def __init__(self, system_prompt: str = "") -> None:
+    def __init__(self) -> None:
         """
         Initializes the Ollama client.
         Model-specific settings are injected via Parameters during processing.
         """
-        self.system_prompt = system_prompt
         self.client = Client()
 
     def process_single(
@@ -73,7 +79,7 @@ class OllamaEngine:
         response = self.client.chat(
             model=params.model,
             messages=[
-                {"role": "system", "content": self.system_prompt},
+                {"role": "system", "content": params.system_prompt},
                 {"role": "user", "content": text},
             ],
             # Use Structured model's schema to guide Ollama's output

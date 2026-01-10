@@ -5,12 +5,10 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from pipeline.chunking.schemas import Chunk
 from pipeline.chunking.stage import Chunking
 from pipeline.core.artifact import Artifact
 from pipeline.core.context import RunContext
 from pipeline.core.stage import PipelineStage, safe_get_dependency, stage_config
-
 from pipeline.extraction.schemas import StructuredSeq
 from .engine.mistral import MistralEngine
 from .engine.ollama import OllamaEngine
@@ -26,12 +24,6 @@ class ExtractionParameters(BaseModel):
     # Engine-specific configuration objects
     mistral: MistralEngine.Parameters = Field(default_factory=MistralEngine.Parameters)
     ollama: OllamaEngine.Parameters = Field(default_factory=OllamaEngine.Parameters)
-
-    system_prompt: str = Field(
-        default="Extract entities into a structured JSON format.",
-        description="The instructions provided to the LLM.",
-    )
-    mistral_api_key: str | None = None
 
 
 @stage_config(
@@ -60,20 +52,11 @@ class Extraction(PipelineStage[StructuredSeq, ExtractionParameters]):
 
         from .engine import create_extraction_engine
 
-        # 1. Initialize the engine (Connection / Auth / System Prompt)
-        engine = create_extraction_engine(
-            provider=parameters.provider,
-            system_prompt=parameters.system_prompt,
-            api_key=parameters.mistral_api_key,
-        )
+        # 1. Initialize the LLM extraction engine
+        engine = create_extraction_engine(provider=parameters.provider)
 
         # 2. Select the specific parameters for the chosen provider
-        # This mirrors the 'p.layout' / 'p.spuriousness' pattern from OCR
-        engine_params = (
-            parameters.mistral
-            if parameters.provider == "mistral"
-            else parameters.ollama
-        )
+        engine_params = parameters.__getattribute__(parameters.provider)
 
         self.logger.info(
             f"Starting {self.name.upper()} stage via {parameters.provider.upper()} "
@@ -87,11 +70,3 @@ class Extraction(PipelineStage[StructuredSeq, ExtractionParameters]):
             extractions.append(item)
 
         return StructuredSeq(root=extractions)
-
-
-def format_chunk_as_numbered_lines(chunk: Chunk) -> str:
-    """
-    Prepares a text chunk for LLM processing by prepending line numbers.
-    Format example: '0 @ Content of first line'
-    """
-    return "\n".join(f"{index} @ {line.text}" for index, line in enumerate(chunk))

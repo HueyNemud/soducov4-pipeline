@@ -125,6 +125,9 @@ class FileCache:
         action = f"for stage '{stage_name}'" if stage_name else "entirely"
         logger.debug(f"Invalidating cache {action} at {self.cache_path}")
 
+        if not self.cache_path.exists():
+            return
+
         with self._open_database("w") as db:
             if stage_name is None:
                 db.clear()

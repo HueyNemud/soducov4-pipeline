@@ -36,9 +36,7 @@ ENGINE_REGISTRY: Dict[str, Type[Any]] = {
 }
 
 
-def create_extraction_engine(
-    provider: str, system_prompt: str = "", api_key: str | None = None
-) -> ExtractionEngine:
+def create_extraction_engine(provider: str) -> ExtractionEngine:
     """
     Factory function to initialize an extraction engine backend.
 
@@ -54,12 +52,4 @@ def create_extraction_engine(
             f"Available providers: {list(ENGINE_REGISTRY.keys())}"
         )
 
-    # Initialize the engine with its persistent state
-    if provider_key == "mistral":
-        return engine_class(api_key=api_key or "", system_prompt=system_prompt)
-
-    elif provider_key == "ollama":
-        return engine_class(system_prompt=system_prompt)
-
-    # Fallback for generic instantiation if signatures align
-    return engine_class(system_prompt=system_prompt)
+    return engine_class()
