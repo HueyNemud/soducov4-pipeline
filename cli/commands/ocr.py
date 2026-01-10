@@ -6,14 +6,15 @@ from pipeline.logging import logger
 import time
 
 
-def add_subparser(subparsers):
-    parser = subparsers.add_parser("ocr", help="Run Surya OCR pipeline on a PDF file")
-    parser.add_argument("pdf", type=str, help="Path to input PDF file.")
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Force re-processing even if cached results exist.",
+def add_subparser(subparsers, parents):
+    """Configures the 'ocr' command and its specific arguments."""
+
+    parser = subparsers.add_parser(
+        "ocr",
+        parents=parents,  # Inherits 'pdf' and '--force'
+        help="Run Surya OCR pipeline on a PDF file.",
     )
+
     parser.set_defaults(func=run)
 
 
