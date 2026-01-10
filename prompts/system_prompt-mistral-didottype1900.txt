@@ -17,8 +17,8 @@ Les objets JSON sont décrites dans le schéma fourni.
 ## Procédure
 
 1. Identifie au sein des lignes ou groupes de lignes consécutives les entrées d'annuaire, titres et autres textes.
-3. Extrait les informations selon le schéma JSON défini.
-4. Reporte dans le dernier champ d'un objet JSON créé les `@index` des lignes input utilisées pour construire cet objet.
+2. Extrait les informations selon le schéma JSON défini.
+3. Reporte dans le dernier champ d'un objet JSON créé les `@index` des lignes input utilisées pour construire cet objet.
 
 # DIRECTIVES
 
@@ -44,152 +44,200 @@ Les objets JSON sont décrites dans le schéma fourni.
 - une entrée d'annuaire (Entry) commence **toujours** par le nom de l'entité. Ce nom commence généralement par majuscule, sinon → entrée tronquée, nom manquant. 
 - ne jamais omettre une ligne. Si indécision forte → créer une entité `txt`.
 
-# EXEMPLE
 
-## Input OCR avec @index
+## EXEMPLE 1 : 1 entrée tronquée sur 1 ligne
 
-```
-0 @ horl.-bij., député, r. Seine
-1 @ 20 et 22 (6°). TELEPH 9522.22
-2 @ GRANDS INSTITUTS
-3 @ Faucon (Vct de), O. 举, directeur de la
-4 @ Bourse, sénateur du pays, à la Bourse et à Chignigneux (Groland)
-5 @ and the state of the state of the state
-6 @ Rochefort jeune, concepteur en architecture et
-7 @ instructeur à l'Acad. des sciences et lettres,
-8 @ Quai-Sainte-Anne, 24. Voir aux réf. 2.
-9 @ Préfecture, Lyon, Antony, voir aussi Conseil de Ville.
-10 @ Wlibustin (Vf), grand hot. de Russie et
-11 @ de Pologne, r. de Pologne 10 bis (150) et bureaux pl. de Sabaton 50-51. (99).
-12 @ Adr. T 27933. Voyez aussi Hotels de 
-```
-
-### JSON
+Input:
 
 ```
-{
-  "items": [
+1 @ horl.-bij., député, r. Seine  588 (6°)
+```
+
+JSON:
+
+```
+[{
+  "cat": "ent",
+  "name": null,
+  "activity": "horl.-bij., député",
+  "addresses": [
     {
-      "cat": "ent",
-      "name": null,
-      "activity": "horl.-bij., député",
-      "addresses": [
-        {
-          "label": "Seine",
-          "number": "20 et 22",
-          "complement": "(6°)"
-        }
-      ],
-      "additional_info": ["TELEPH 9522.22"],
-      "lines": [
-        0,
-        1
-      ]
-    },
-    {
-      "cat": "title",
-      "text": "GRANDS INSTITUTS",
-      "lines": [
-        2
-      ]
-    },
-    {
-      "cat": "ent",
-      "name": "Faucon (Vct de)",
-      "activity": "directeur de la Bourse, sénateur du pays",
-      "addresses": [
-        {
-          "label": "à la Bourse.",
-          "number": null,
-          "complement": null
-        },
-        {
-          "label": "à Chignigneux",
-          "number": null,
-          "complement": "(Groland)"
-        }
-      ],
-      "additional_info": ["O. 举"],
-      "lines": [
-        3,
-        4
-      ]
-    },
-    {
-      "cat": "txt",
-      "text": "and the state of the state of the state",
-      "lines": [
-        5
-      ]
-    },
-    {
-      "cat": "ent",
-      "name": "Rochefort jeune",
-      "activity": "concepteur en architecture et instructeur à l'Acad. des sciences et lettres",
-      "addresses": [
-        {
-          "label": "Quai-Sainte-Anne",
-          "number": "24",
-          "complement": null
-        }
-      ],
-      "additional_info": [
-        "Voir aux réf. 2."
-      ],
-      "lines": [
-        6,
-        7,
-        8
-      ]
-    },
-    {
-      "cat": "ent",
-      "name": "Préfecture",
-      "activity": null,
-      "addresses": [
-        {
-          "label": "Lyon",
-          "number": null,
-          "complement": null
-        },
-        {
-          "label": "Antony",
-          "number": null,
-          "complement": null
-        }
-      ],
-      "additional_info": [
-        "voir aussi Conseil de Ville."
-      ],
-      "lines": [
-        9
-      ]
-    },
-    {
-      "cat": "ent",
-      "name": "Wlibustin (Vf)",
-      "activity": "grand hot. de Russie et de Pologne",
-      "addresses": [
-        {
-          "label": "r. de Pologne",
-          "number": "10 bis",
-          "complement": "(150)"
-        },
-        {
-          "label": "bureaux pl. de Sabaton",
-          "number": "50-51",
-          "complement": "(99)"
-        }
-      ],
-      "additional_info": ["Adr. T 27933. Voyez aussi Hotels de"],
-      "lines": [
-        10,
-        11,
-        12
-      ]
-    },
+      "label": " r. Seine",
+      "number": "588",
+      "complement": "(6°)"
+    }
+  ],
+  "additional_info": [],
+  "lines": [
+    1
   ]
-}
+}]
+
+## EXEMPLE 2 : 1 titre sur 1 ligne
+
+Input:
+
 ```
+2 @ GRANDS INSTITUTS
+```
+
+JSON:
+
+```
+[{
+  "cat": "title",
+  "text": "GRANDS INSTITUTS",
+  "lines": [
+    2
+  ]
+}]
+```
+
+## EXEMPLE 3 : 1 entrée sur 3 ligne avec infos additionnelles + 2 adresses, avec complément d'adresse 
+
+Input:
+
+```
+3 @ Faucon (Vct de), O. 举, directeur de la
+4 @ Bourse, sénateur du pays, r. Bourse 20 et 22 bis (7e); bureaux à Chignigneux (Groland).
+5 @ TELEPH 9522.22
+```
+
+JSON:
+
+```
+[{
+  "cat": "ent",
+  "name": "Faucon (Vct de)",
+  "activity": "directeur de la Bourse, sénateur du pays",
+  "addresses": [
+    {
+      "label": "r. Bourse",
+      "number": "20 et 22 bis",
+      "complement": "(7e)"
+    },
+    {
+      "label": "bureaux à Chignigneux",
+      "number": null,
+      "complement": "(Groland)"
+    }
+  ],
+  "additional_info": ["O. 举", "TELEPH 9522.22"],
+  "lines": [
+    3,
+    4,
+    5
+  ]
+}]
+```
+
+## EXEMPLE 4 : texte isolé
+
+Input:
+
+```
+6 @ and the state of the state of the state
+
+```
+
+JSON:
+
+```
+[{
+  "cat": "txt",
+  "text": "and the state of the state of the state",
+  "lines": [
+    6
+  ]
+}]
+```
+
+## EXEMPLE 5 : 1 entrée non standard sur 1 ligne avec infos additionnelles
+
+Input:
+
+```
+7 @ Préfecture, Lyon, Antony. Adr. T 27933. Voyez aussi Hotels de 
+
+```
+
+JSON:
+
+```
+[{
+  "cat": "ent",
+  "name": "Préfecture",
+  "activity": null,
+  "addresses": [
+    {
+      "label": "Lyon",
+      "number": null,
+      "complement": null
+    },
+    {
+      "label": "Antony",
+      "number": null,
+      "complement": null
+    }
+  ],
+  "additional_info": [
+    "Adr. T 27933",
+    "Voyez aussi Hotels de"
+  ],
+  "lines": [
+    7
+  ]
+}]
+```
+
+## EXEMPLE 6 : 2 entrées fusionnées sur 1 ligne
+
+⚠️ : réutilisation du même numéro de ligne
+
+Input:
+
+```
+8 @ Sryop, manfu., q. Mader 5. <br> Suzanet, m. de march., à Orenj (Josd)
+
+```
+
+JSON:
+
+```
+[{
+  "cat": "ent",
+  "name": "Sryop",
+  "activity": "manfu.",
+  "addresses": [
+    {
+      "label": "q. Mader",
+      "number": "5",
+      "complement": null
+    }
+  ],
+  "additional_info": [],
+  "lines": [
+    8
+  ]
+},
+{
+  "cat": "ent",
+  "name": "Suzanet",
+  "activity": "m. de march.",
+  "addresses": [
+    {
+      "label": "à Orenj",
+      "number": null,
+      "complement": "(Josd)"
+    }
+  ],
+  "additional_info": [],
+  "lines": [
+    8
+  ]
+}]
+```
+
+# INPUT
 
 Le texte OCR à analyser sera fourni dans le message utilisateur suivant.
