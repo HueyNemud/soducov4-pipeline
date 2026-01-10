@@ -1,129 +1,179 @@
-from typing import Any, Iterator
-from pipeline.ocr.schemas import OCRDocument
+"""
+Document Chunking Service.
+
+This module provides the logic to segment an OCRDocument into manageable chunks
+based on token counts, preserving local context via overlapping margins.
+"""
+
+from typing import Any, Iterator, List, NamedTuple, Optional
 from transformers import AutoTokenizer
+from pydantic import Field, dataclasses
+
+from pipeline.ocr.schemas import OCRDocument
 from pipeline.chunking.schemas import Chunk, ChunkLine
 from pipeline.logging import logger
 
 
+class TokenizedLine(NamedTuple):
+    """Intermediary container for line content and pre-calculated metadata."""
+
+    token_count: int
+    page_idx: int
+    line_idx: int
+    text: str
+    confidence: Optional[float]
+    spuriousness: Optional[float]
+    layout_ix: Optional[int]
+    layout_label: Optional[str]
+
+
 class ChunkCreator:
-    """Creates chunks from an OCRDocument using a tokenizer to count tokens."""
+    """
+    Service responsible for partitioning OCR documents into token-limited chunks.
 
-    _tokenizer: Any = None
+    By encapsulating the parameters and tokenizer within the instance, it provides
+    a clean interface for batch processing documents with consistent settings.
+    """
 
-    def __init__(
-        self,
-        document: OCRDocument,
-        tokenizer_model: str,
-        max_tokens: int,
-        margin_lines: int,
-        spuriousness_threshold: float,
-    ):
-        self.document = document
-        self.tokenizer_model = tokenizer_model
-        self.max_tokens = max_tokens
-        self.margin_lines = margin_lines
-        self.spuriousness_threshold = spuriousness_threshold
+    @dataclasses.dataclass
+    class Parameters:
+        """Configuration for the chunking and filtering engine."""
+
+        tokenizer_model: str = Field(
+            default="almanach/camembert-base",
+            description="HuggingFace tokenizer model name.",
+        )
+        max_tokens: int = Field(
+            default=2000, description="Maximum tokens allowed per core chunk."
+        )
+        margin_lines: int = Field(
+            default=2,
+            description="Number of context lines to include as margin after each chunk.",
+        )
+        spuriousness_threshold: float = Field(
+            default=1.0,
+            ge=0.0,
+            le=1.0,
+            description="Threshold above which lines are considered spurious and excluded.",
+        )
+
+    def __init__(self, params: Optional[Parameters] = None):
+        """Initializes the service with specific runtime parameters."""
+        self.params = params or self.Parameters()
+        self._tokenizer: Any = None
 
     @property
-    def tokenizer(self):
-        # Lazy-load to avoid heavy import-time side effects
+    def tokenizer(self) -> Any:
+        """Lazy-loads the HuggingFace tokenizer using the configured model."""
         if self._tokenizer is None:
-            self._tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_model)
+            self._tokenizer = AutoTokenizer.from_pretrained(self.params.tokenizer_model)
         return self._tokenizer
 
-    def generate(self) -> Iterator[Chunk]:
+    def generate(self, document: OCRDocument) -> Iterator[Chunk]:
         """
-        Yields (core_indices, margin_indices) where both are list[int].
+        Segments the provided OCRDocument into a sequence of Chunks.
+
+        Yields:
+            Iterator[Chunk]: A stream of chunks containing core text and context margins.
         """
-        document = self.document
-        if not document.ocr:
+        # 1. Pre-process: Filter noise and calculate token weights
+        lines = self._get_clean_tokenized_lines(document)
+        if not lines:
             return
 
-        # Build a flat list of (page, line, token_len) for all pages
-        # Optionally reject spurious lines here
-        lines = [
-            (
-                len(self.tokenizer(line.text, add_special_tokens=False)["input_ids"]),
-                page_ix,
-                line_ix,
-                line.text,
-                line.confidence,
-                line.spuriousness,
-                line.layout_ix,
-                (
-                    document.layout[page_ix].bboxes[line.layout_ix].label
-                    if line.layout_ix is not None
-                    else None
-                ),
-            )
-            for page_ix, page in enumerate(document.ocr)
-            for line_ix, line in enumerate(page.text_lines)
-            if not line.spuriousness or line.spuriousness < self.spuriousness_threshold
-        ]
+        # 2. Planning: Calculate chunk boundaries
+        spans = self._calculate_chunk_spans(lines)
 
-        # Build core chunks as ranges [start, end)
-        chunk_spans: list[tuple[int, int]] = []
-
-        # The idea is to accumulate lines until we meet a total of max_tokens or we've consumed the whole text.
-        # A chunk may contain less than max_tokens if adding the next line would exceed the limit.
-        # Lines are never split: a line longer than max_tokens will raise a warning.
-        start = 0
-        while start < len(lines):
-            accumulated_tokens = 0
-            end = start
-
-            while end < len(lines):
-                token_len = lines[end][0]
-                if accumulated_tokens + token_len > self.max_tokens:
-                    break
-                accumulated_tokens += token_len
-                end += 1
-
-            # If end == start, it means the current line alone exceeds max_tokens
-            if end == start:
-                token_len, page, line, text, *_ = lines[end]
-                logger.warning(
-                    f"Warning: line at page {page}, line {line} has {token_len} tokens, "
-                    f"which exceeds the max_tokens limit of {self.max_tokens}."
-                    f"Long line text: {text[:100]}..."
-                    f"The line will be included in its own chunk."
-                )
-                end += 1  # Force to include this long line in its own chunk
-
-            chunk_spans.append((start, end))
-            start = end
-
-        # Yield core + margin-after
-        for start, end in chunk_spans:
-
-            # Core chunk lines
+        # 3. Execution: Build the nested Pydantic models
+        for start, end in spans:
             core = [
-                ChunkLine(
-                    page=lines[i][1],
-                    line=lines[i][2],
-                    text=lines[i][3],
-                    confidence=lines[i][4],
-                    spuriousness=lines[i][5],
-                    layout_ix=lines[i][6],
-                    layout_label=lines[i][7],
-                    is_margin=False,
-                )
+                self._to_chunk_line(lines[i], is_margin=False)
                 for i in range(start, end)
             ]
 
-            # Margin lines after
-            margin_after_end = min(end + self.margin_lines, len(lines))
-            margin_after = [
-                ChunkLine(
-                    page=lines[i][1],
-                    line=lines[i][2],
-                    text=lines[i][3],
-                    confidence=lines[i][4],
-                    spuriousness=lines[i][5],
-                    layout_ix=lines[i][6],
-                    layout_label=lines[i][7],
-                    is_margin=True,
-                )
-                for i in range(end, margin_after_end)
+            # Contextual look-ahead (margin)
+            margin_limit = min(end + self.params.margin_lines, len(lines))
+            margins = [
+                self._to_chunk_line(lines[i], is_margin=True)
+                for i in range(end, margin_limit)
             ]
-            yield Chunk(root=core + margin_after)
+
+            yield Chunk(root=core + margins)
+
+    def _get_clean_tokenized_lines(self, doc: OCRDocument) -> List[TokenizedLine]:
+        """Flatten pages into lines, filtering out spurious entries."""
+        prepared_lines: List[TokenizedLine] = []
+
+        for p_idx, page in enumerate(doc.ocr):
+            for l_idx, line in enumerate(page.text_lines):
+                # Ignore lines identified as scan noise/artifacts
+                if (
+                    line.spuriousness
+                    and line.spuriousness >= self.params.spuriousness_threshold
+                ):
+                    continue
+
+                token_count = len(
+                    self.tokenizer(line.text, add_special_tokens=False)["input_ids"]
+                )
+
+                # Resolve layout context
+                label = None
+                if line.layout_ix is not None:
+                    label = doc.layout[p_idx].bboxes[line.layout_ix].label
+
+                prepared_lines.append(
+                    TokenizedLine(
+                        token_count=token_count,
+                        page_idx=p_idx,
+                        line_idx=l_idx,
+                        text=line.text,
+                        confidence=line.confidence,
+                        spuriousness=line.spuriousness,
+                        layout_ix=line.layout_ix,
+                        layout_label=label,
+                    )
+                )
+        return prepared_lines
+
+    def _calculate_chunk_spans(
+        self, lines: List[TokenizedLine]
+    ) -> List[tuple[int, int]]:
+        """Determines the start and end indices for core chunks based on token budget."""
+        spans: List[tuple[int, int]] = []
+        cursor, total = 0, len(lines)
+
+        while cursor < total:
+            accumulated_tokens, end = 0, cursor
+
+            while end < total:
+                line_tokens = lines[end].token_count
+                if accumulated_tokens + line_tokens > self.params.max_tokens:
+                    break
+                accumulated_tokens += line_tokens
+                end += 1
+
+            # Safety: If a single line is bigger than max_tokens, put it in its own chunk
+            if end == cursor:
+                logger.warning(
+                    f"Oversized line at page {lines[cursor].page_idx} (tokens: {lines[cursor].token_count})"
+                )
+                end += 1
+
+            spans.append((cursor, end))
+            cursor = end
+
+        return spans
+
+    def _to_chunk_line(self, data: TokenizedLine, is_margin: bool) -> ChunkLine:
+        """Converts internal TokenizedLine tuple to the public ChunkLine schema."""
+        return ChunkLine(
+            page=data.page_idx,
+            line=data.line_idx,
+            text=data.text,
+            confidence=data.confidence,
+            spuriousness=data.spuriousness,
+            layout_ix=data.layout_ix,
+            layout_label=data.layout_label,
+            is_margin=is_margin,
+        )
