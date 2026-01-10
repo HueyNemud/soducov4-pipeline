@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Any, List, Optional, Type, cast
+from typing import Any, List, Optional
 from pydantic import BaseModel, Field
 from surya.recognition.schema import (
     OCRResult as SuryaOCRResult,
@@ -12,9 +12,16 @@ class TextLine(SuryaTextLine):
     """
     Extended Surya TextLine with additional metadata for directory processing.
     """
-    reading_order_ix: Optional[int] = Field(None, description="Index in the final reading sequence.")
-    layout_ix: Optional[int] = Field(None, description="Index of the associated layout block.")
-    spuriousness: float = Field(default=float("nan"), description="Noise score (0.0 to 1.0).")
+
+    reading_order_ix: Optional[int] = Field(
+        None, description="Index in the final reading sequence."
+    )
+    layout_ix: Optional[int] = Field(
+        None, description="Index of the associated layout block."
+    )
+    spuriousness: float = Field(
+        default=float("nan"), description="Noise score (0.0 to 1.0)."
+    )
 
     @classmethod
     def from_surya(cls, line: SuryaTextLine | dict[str, Any]) -> TextLine:
@@ -27,12 +34,13 @@ class OCRResult(SuryaOCRResult):
     """
     Enhanced page-level OCR result containing enriched text lines.
     """
+
     text_lines: List[TextLine]
 
     @classmethod
     def from_surya(cls, result: SuryaOCRResult | dict[str, Any]) -> OCRResult:
         """
-        Transfers data from Surya's OCRResult to our extended OCRResult, 
+        Transfers data from Surya's OCRResult to our extended OCRResult,
         ensuring all text lines are upgraded to our TextLine class.
         """
         if isinstance(result, SuryaOCRResult):
@@ -50,9 +58,10 @@ class OCRResult(SuryaOCRResult):
 
 class OCRDocument(BaseModel):
     """
-    The main pivot document structure. 
+    The main pivot document structure.
     It holds both the geometric layout blocks and the recognized text.
     """
+
     layout: List[LayoutResult]
     ocr: List[OCRResult]
 
@@ -63,7 +72,4 @@ class OCRDocument(BaseModel):
         """
         Factory method to assemble an OCRDocument from raw Surya model outputs.
         """
-        return cls(
-            layout=layout, 
-            ocr=[OCRResult.from_surya(r) for r in ocr]
-        )
+        return cls(layout=layout, ocr=[OCRResult.from_surya(r) for r in ocr])
