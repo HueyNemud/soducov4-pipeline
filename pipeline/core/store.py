@@ -1,101 +1,136 @@
+"""
+Data Storage and Configuration Utilities.
+
+This module provides the Store class, a recursive dictionary wrapper that
+supports attribute-style access and nested path resolution (e.g., 'a.b.c').
+"""
+
 from collections.abc import MutableMapping
-from typing import Any, Iterator, Mapping, Optional
+from typing import Any, Iterator
 
 
 class Store(MutableMapping):
-    """Dictionnaire récursif avec accès par attribut et chemins de type 'x.y.z'.
-    Reprend (mal) l'idée de `Box` mais sans dépendance externe.
+    """
+    A recursive dot-accessible dictionary.
 
-    Paramètres:
-    - strict: si True, les accès à des clés inexistantes lèvent KeyError.
-
+    Provides a convenient way to manage nested configurations or results
+    where keys can be accessed as attributes. Intermediate levels are
+    automatically wrapped in Store instances.
     """
 
-    def __init__(self, initial: Optional[dict[str, Any]] = None, strict: bool = True):
-        self._data: dict[str, Any] = {}
-        self._strict = strict
-        if initial:
-            for k, v in initial.items():
-                self[k] = v
+    def __init__(self, initial: dict[str, Any] | None = None, strict: bool = True):
+        """
+        Initializes the Store.
 
-    # ---------------------
-    # MutableMapping
-    # ---------------------
+        Args:
+            initial: Optional dictionary to populate the store.
+            strict: If True, accessing non-existent keys via attributes raises AttributeError.
+        """
+        self._data: dict[str, Any] = {}
+        self._is_strict = strict
+        if initial:
+            self.update(initial)
+
+    # -------------------------------------------------------------------------
+    # MutableMapping Implementation
+    # -------------------------------------------------------------------------
+
     def __getitem__(self, key: str) -> Any:
+        """Retrieves an item from the store."""
         if key not in self._data:
-            if self._strict:
-                raise KeyError(key)
+            if self._is_strict:
+                raise KeyError(f"Key '{key}' not found in Store.")
             return None
         return self._data[key]
 
     def __setitem__(self, key: str, value: Any) -> None:
+        """Sets an item, converting nested dictionaries to Store instances."""
         if isinstance(value, dict):
+            # If the target is already a Store, merge the data; otherwise, create a new Store
             if key in self._data and isinstance(self._data[key], Store):
                 self._data[key].update(value)
             else:
-                self._data[key] = Store(value, strict=self._strict)
+                self._data[key] = Store(value, strict=self._is_strict)
         else:
             self._data[key] = value
 
     def __delitem__(self, key: str) -> None:
+        """Removes an item from the store."""
         del self._data[key]
 
     def __iter__(self) -> Iterator[str]:
+        """Returns an iterator over the store keys."""
         return iter(self._data)
 
     def __len__(self) -> int:
+        """Returns the number of top-level items in the store."""
         return len(self._data)
 
-    # ---------------------
-    # Accès par attribut
-    # ---------------------
+    # -------------------------------------------------------------------------
+    # Attribute-Style Access
+    # -------------------------------------------------------------------------
+
     def __getattr__(self, name: str) -> Any:
+        """Enables access via dot-notation: store.key."""
         if name.startswith("_"):
             return object.__getattribute__(self, name)
-        return self[name]
+        try:
+            return self[name]
+        except KeyError:
+            raise AttributeError(f"'Store' object has no attribute '{name}'")
 
     def __setattr__(self, name: str, value: Any) -> None:
+        """Enables assignment via dot-notation: store.key = value."""
         if name.startswith("_"):
             object.__setattr__(self, name, value)
         else:
             self[name] = value
 
-    # ---------------------
-    # Méthodes utilitaires
-    # ---------------------
+    # -------------------------------------------------------------------------
+    # Deep Path Utilities
+    # -------------------------------------------------------------------------
+
     def deep_set(self, path: str, value: Any) -> None:
-        """Assigne une valeur via un chemin 'x.y.z', crée les niveaux intermédiaires si nécessaire."""
+        """
+        Sets a value using a dot-separated path (e.g., 'database.config.port').
+        Intermediate levels are created as Store instances if they do not exist.
+        """
         parts = path.split(".")
-        node: Store = self
+        current_node: Store = self
+
         for part in parts[:-1]:
-            if part not in node._data or not isinstance(node._data[part], Store):
-                node._data[part] = Store(strict=self._strict)
-            node = node._data[part]
-        node[parts[-1]] = value
+            if part not in current_node or not isinstance(current_node[part], Store):
+                current_node[part] = Store(strict=self._is_strict)
+            current_node = current_node[part]
+
+        current_node[parts[-1]] = value
 
     def get_path(self, path: str, default: Any = None) -> Any:
-        """Récupère une valeur via un chemin 'x.y.z', retourne default si une étape n'existe pas."""
+        """
+        Retrieves a value using a dot-separated path.
+        Returns the default value if any part of the path is missing.
+        """
         parts = path.split(".")
-        node: Any = self
-        for part in parts:
-            if not isinstance(node, Store):
-                return default
-            if part not in node._data:
-                return default
-            node = node._data[part]
-        return node
+        current: Any = self
 
-    def update(self, values: Mapping[str, Any]) -> None:
-        for k, v in values.items():
-            self[k] = v
+        for part in parts:
+            if not isinstance(current, Store) or part not in current:
+                return default
+            current = current[part]
+
+        return current
 
     def as_dict(self) -> dict[str, Any]:
+        """Recursively converts the Store and its children back into standard dictionaries."""
         return {
-            k: v.as_dict() if isinstance(v, Store) else v for k, v in self._data.items()
+            key: (val.as_dict() if isinstance(val, Store) else val)
+            for key, val in self._data.items()
         }
 
     def __repr__(self) -> str:
-        return repr(self.as_dict())
+        """Return a string representation of the store's data."""
+        return f"Store({repr(self.as_dict())})"
 
     def __bool__(self) -> bool:
+        """Returns True if the store contains data."""
         return bool(self._data)

@@ -1,16 +1,25 @@
-"""A run context for a pipeline execution."""
+"""
+Pipeline Runtime Context.
+
+Manages execution state, configuration parameters, and the lifecycle of
+output artifacts. This context acts as the central coordination point
+between different pipeline stages.
+"""
 
 from pathlib import Path
+from typing import Optional
+
 from pipeline.core.artifact import Artifact, JSONLWriter
 from pipeline.core.store import Store
 
 
 class RunContext:
-    """Context for a pipeline run, providing access to configuration and paths."""
+    """
+    Orchestrates state and storage for a specific pipeline execution.
 
-    store: Store
-
-    # TODO Introduire un DebugSink (ou DebugWriter) simple pour gérer les sorties de debug (fichiers, logs, etc.)
+    Provides access to global configuration (paths, debug flags) and manages
+    the streaming of artifacts through an active JSONL writer.
+    """
 
     def __init__(
         self,
@@ -19,6 +28,10 @@ class RunContext:
         debug: bool = False,
         verbose: bool = False,
     ) -> None:
+        """
+        Initializes the run context and prepares the filesystem.
+        """
+        # Global shared data store
         self.store = Store(
             {
                 "pdf_path": pdf_path,
@@ -27,41 +40,57 @@ class RunContext:
                 "verbose": verbose,
             }
         )
+
+        # Namespaced storage for stage-specific data and artifacts
         self.store.stages = Store()
         self.store.artifacts = Store()
+
+        # Active stream for incremental artifact writing
+        self._artifact_stream: Optional[JSONLWriter] = None
+
         self._ensure_artifacts_dir()
 
     @property
     def pdf_path(self) -> Path:
+        """Original source document path."""
         return self.store.pdf_path
 
     @property
     def artifacts_dir(self) -> Path:
+        """Root directory for all generated outputs."""
         return self.store.artifacts_dir
 
     @property
-    def debug(self) -> bool:
+    def debug_enabled(self) -> bool:
+        """Flag indicating if debug mode is active."""
         return self.store.debug
 
     @property
-    def verbose(self) -> bool:
+    def verbose_enabled(self) -> bool:
+        """Flag indicating if verbose logging is active."""
         return self.store.verbose
 
-    def _ensure_artifacts_dir(self, stage: str = "") -> None:
-        """Ensures that the artifacts directory (and stage subdirectory, if specified) exists."""
-        dir_path = self.artifacts_dir / stage if stage else self.artifacts_dir
-        dir_path.mkdir(parents=True, exist_ok=True)
+    def _ensure_artifacts_dir(self, stage_name: str = "") -> None:
+        """Creates the artifact root or stage-specific subdirectories on disk."""
+        target_path = self.artifacts_dir
+        if stage_name:
+            target_path /= stage_name
 
-    _artifact_stream: JSONLWriter | None = None
+        target_path.mkdir(parents=True, exist_ok=True)
 
-    def set_stream(self, writer: JSONLWriter) -> None:
-        """Active un flux d'émission pour le streaming."""
+    def attach_stream(self, writer: JSONLWriter) -> None:
+        """Connects a JSONL writer to enable real-time artifact streaming."""
         self._artifact_stream = writer
 
-    def clear_stream(self) -> None:
-        """Désactive le flux d'émission."""
+    def detach_stream(self) -> None:
+        """Disconnects the active artifact stream."""
         self._artifact_stream = None
 
-    def emit(self, event: Artifact) -> None:
-        if self._artifact_stream is not None:
-            self._artifact_stream.write(event)
+    def emit(self, artifact: Artifact) -> None:
+        """
+        Writes an artifact to the active stream if one is connected.
+
+        Used by stages to output records incrementally during processing.
+        """
+        if self._artifact_stream:
+            self._artifact_stream.write(artifact)

@@ -1,6 +1,14 @@
+"""
+Pipeline Orchestration Engine.
+
+This module provides the core Pipeline class responsible for topological sorting
+of stages, dependency resolution, execution with caching support, and
+real-time artifact streaming.
+"""
+
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Iterator, Mapping, Sequence, TypedDict
+from typing import Any, Callable, Iterator, Mapping, Sequence, TypedDict, Optional
 
 from pydantic import BaseModel
 from pipeline.core.artifact import (
@@ -21,6 +29,8 @@ from ..logging import logger
 
 
 class ExecutionParameters(TypedDict):
+    """Global configuration for a pipeline execution run."""
+
     pdf_path: Path
     artifacts_dir: Path
     debug: bool
@@ -28,78 +38,90 @@ class ExecutionParameters(TypedDict):
 
 
 class Pipeline:
+    """
+    Manages the sequential execution of document processing stages.
+
+    It ensures stages are run in the correct order based on dependencies,
+    manages the persistence of artifacts, and handles caching to avoid
+    redundant computations.
+    """
 
     def __init__(
         self,
         stages: list[PipelineStage],
         ctx: RunContext,
-        cache: FileCache | None = None,
+        cache: Optional[FileCache] = None,
     ):
+        """Initializes the pipeline with a sorted set of stages."""
         self.stages = toposort(stages)
         self.ctx = ctx
         self.cache = cache
         self._post_stage_hooks: list[Callable[[PipelineStage, Any], None]] = []
 
-        # Register stages in the context store
+        # Register stages and their default parameters in the context store
         for stage in self.stages:
-            if stage.params_model:
-                self.ctx.store.deep_set(
-                    f"stages.{stage.name}.params", stage.params_model
-                )
+            if stage.name not in self.ctx.store.stages:
+                self.ctx.store.stages[stage.name] = {
+                    "params": stage.validate_params({})
+                }
 
     def run(
         self,
-        stage_params: dict[str, Mapping | Parameters] | None = None,
-        force_compute: Sequence[str] | None = None,
-    ) -> Iterator[tuple[str, Artifact | None]]:
+        stage_params: Optional[dict[str, Mapping | Parameters]] = None,
+        force_compute: Optional[Sequence[str]] = None,
+    ) -> Iterator[tuple[str, Optional[Artifact]]]:
+        """
+        Executes all stages in the pipeline.
 
+        Args:
+            stage_params: Parameter overrides indexed by stage name.
+            force_compute: List of stage names to recompute regardless of cache.
+
+        Yields:
+            Tuple of (stage_name, produced_artifact).
+        """
         force_compute = force_compute or []
-        cache = self.cache
 
-        for pos, stage in enumerate(self.stages):
-            logger.info(f"▶️  {pos + 1}:{stage.name.upper()}")
+        for index, stage in enumerate(self.stages):
+            logger.info(f"▶️  Step {index + 1}/{len(self.stages)}: {stage.name.upper()}")
 
-            # 1. Récupère les paramètres pour cette étape
-            # Avec mise à jour par les overrides passés en argument
+            # 1. Resolve parameters (defaults + overrides)
             params = self._get_stage_params(stage, stage_params)
 
-            artifact: Artifact | None = None
-
-            # 3. Résout les dépendances
+            # 2. Resolve dependencies from previous stages or disk
             dependencies = self._resolve_dependencies(stage)
 
-            # 4. Tente de charger depuis le cache ou calcule l'artifact
-            if cache:
+            artifact: Optional[Artifact] = None
+
+            # 3. Cache Check: Try to load existing artifact unless forced
+            if self.cache:
                 if stage.name in force_compute:
-                    cache.invalidate(stage.name)
+                    self.cache.invalidate(stage.name)
                 else:
                     artifact = self._load_from_cache(stage, params)
 
+            # 4. Computation: Run the stage if no cached artifact was found
             if artifact is None:
-                logger.debug(
-                    f"Computing artifact for stage {stage.name}...",
-                    params=params,
-                    dependencies=dependencies.keys(),
-                )
+                logger.debug(f"Computing stage '{stage.name}'...")
 
                 with self.artifact_streaming(stage):
                     artifact = stage.run(self.ctx, params, dependencies)
 
+                # Persist result to the main artifact file
                 if artifact:
-                    save_artifact(
-                        artifact, self._artifact_path_for_stage_class(type(stage))
-                    )
+                    save_artifact(artifact, self._get_artifact_path(type(stage)))
 
-            if cache and artifact:
-                cache.save(
+            # 5. Update Cache: Save the newly computed artifact
+            if self.cache and artifact:
+                self.cache.save(
                     stage.name,
                     artifact,
                     override=True,
                     meta=compute_stage_meta(stage, params),
                 )
 
+            # 6. Finalize: Store in context memory and notify hooks
             self.ctx.store.artifacts[stage.name] = artifact
-
             yield stage.name, artifact
 
             for hook in self._post_stage_hooks:
@@ -107,115 +129,103 @@ class Pipeline:
 
     @contextmanager
     def artifact_streaming(self, stage: PipelineStage) -> Iterator[None]:
-        writer = open_jsonl(self._artifact_stream_path_for_stage_class(type(stage)))
-        self.ctx.set_stream(writer)
+        """Context manager to enable real-time JSONL streaming during stage execution."""
+        path = self._get_stream_path(type(stage))
+        writer = open_jsonl(path)
+        self.ctx.attach_stream(writer)
         try:
             yield
         finally:
-            self.ctx.clear_stream()
+            self.ctx.detach_stream()
             writer.close()
 
-    def _artifact_path_for_stage_class(self, stage: type[PipelineStage]) -> Path:
-        return self.ctx.artifacts_dir / f"{stage.metadata().name}.json"
+    def _get_artifact_path(self, stage_cls: type[PipelineStage]) -> Path:
+        """Returns the standard path for a stage's JSON artifact."""
+        return self.ctx.artifacts_dir / f"{stage_cls.metadata().name}.json"
 
-    def _artifact_stream_path_for_stage_class(self, stage: type[PipelineStage]) -> Path:
-        return self.ctx.artifacts_dir / f"{stage.metadata().name}.items.jsonl"
+    def _get_stream_path(self, stage_cls: type[PipelineStage]) -> Path:
+        """Returns the standard path for a stage's JSONL stream file."""
+        return self.ctx.artifacts_dir / f"{stage_cls.metadata().name}.items.jsonl"
 
     def _get_stage_params(
         self,
         stage: PipelineStage,
-        stage_params: dict[str, Mapping | Parameters] | None = None,
+        overrides: Optional[dict[str, Mapping | Parameters]] = None,
     ) -> Parameters:
-        params = dict(self.ctx.store.stages[stage.name].params)
-        overrides = (stage_params or {}).get(stage.name, {})
-        if isinstance(overrides, BaseModel):
-            overrides = overrides.model_dump()
-        params.update(overrides)
+        """Merges store parameters with runtime overrides and validates them."""
+        params_dict = dict(self.ctx.store.stages[stage.name].params)
 
-        validated_params = stage.params_model.model_validate(params)
-        return validated_params
+        stage_overrides = (overrides or {}).get(stage.name, {})
+        if isinstance(stage_overrides, BaseModel):
+            stage_overrides = stage_overrides.model_dump()
 
-    def _resolve_dependencies(
-        self,
-        stage: PipelineStage,
-    ) -> dict[str, Artifact]:
-        resolved_dependencies: dict[str, Artifact] = {}
+        params_dict.update(stage_overrides)
+        return stage.validate_params(params_dict)
+
+    def _resolve_dependencies(self, stage: PipelineStage) -> dict[str, Artifact]:
+        """Ensures all required artifacts for a stage are loaded into memory."""
+        resolved: dict[str, Artifact] = {}
+
         for dep_cls in stage.consumes:
-            dep_meta = dep_cls.metadata()
-            if dep_meta.produces is None:
+            meta = dep_cls.metadata()
+
+            if not meta.produces:
                 raise ValueError(
-                    f"Stage {stage.name} depends on {dep_meta.name} which does not produce any artifact."
+                    f"Stage {stage.name} depends on non-producing stage {meta.name}"
                 )
-            if dep_meta.name not in self.ctx.store.artifacts:
-                # Essaye de charger depuis le fichier d'artifact
-                dep_artifact_path = self._artifact_path_for_stage_class(dep_cls)
-                dep_artifact = load_artifact(
-                    dep_artifact_path, dep_meta.produces or Artifact
-                )
-                self.ctx.store.artifacts[dep_meta.name] = dep_artifact
 
-            try:
-                resolved_dependencies[dep_meta.name] = self.ctx.store.artifacts[
-                    dep_meta.name
-                ]
-            except KeyError:
-                raise ValueError(
-                    f"Dependency '{dep_meta.name}' for stage '{stage.name}' not found in context artifacts."
-                )
-        return resolved_dependencies
+            # If not in memory, attempt to load from the artifact file
+            if meta.name not in self.ctx.store.artifacts:
+                path = self._get_artifact_path(dep_cls)
+                artifact = load_artifact(path, meta.produces)
+                self.ctx.store.artifacts[meta.name] = artifact
 
-    def _load_from_cache(
-        self,
-        stage: PipelineStage,
-        params: dict,
-    ) -> Artifact | None:
-        cache = self.cache
-        artifact_type = stage.produces
+            resolved[meta.name] = self.ctx.store.artifacts[meta.name]
 
-        artifact: Artifact | None = None
-        if cache and artifact_type:
-            try:
-                expected_meta = compute_stage_meta(stage, params)
-                artifact = cache.load(
-                    stage.name, artifact_type, expected_meta=expected_meta
-                )
-                stage.logger.debug("Loaded artifact from cache.", meta=expected_meta)
-                return artifact
-            except KeyError:
-                stage.logger.debug("Cache miss; computing artifact.")
+        return resolved
 
-        return artifact
+    def _load_from_cache(self, stage: PipelineStage, params: Any) -> Optional[Artifact]:
+        """Attempts to retrieve a valid artifact from the file cache."""
+        if not self.cache or not stage.produces:
+            return None
+
+        try:
+            expected_meta = compute_stage_meta(stage, params)
+            artifact = self.cache.load(
+                stage.name, stage.produces, expected_meta=expected_meta
+            )
+            logger.debug(f"Cache hit for stage '{stage.name}'")
+            return artifact
+        except KeyError:
+            logger.debug(f"Cache miss for stage '{stage.name}'")
+            return None
 
     @staticmethod
     def for_pdf(
         pdf_path: Path,
-        stages: list[PipelineStage] | None = None,
+        stages: Optional[list[PipelineStage]] = None,
         debug: bool = False,
         verbose: bool = False,
         enable_cache: bool = True,
     ) -> "Pipeline":
-        """Factory method to create a Pipeline for a given PDF file."""
-
+        """Factory method to initialize a Pipeline for a specific PDF file."""
         artifacts_dir = pdf_path.parent / pdf_path.stem / "artifacts"
-        execution_parameters = ExecutionParameters(
+
+        config = ExecutionParameters(
             pdf_path=pdf_path.resolve(),
             artifacts_dir=artifacts_dir.resolve(),
             debug=debug,
             verbose=verbose,
         )
-        ctx = RunContext(**execution_parameters)
-        cache = FileCache(ctx.store.pdf_path) if enable_cache else None
-        return Pipeline(
-            stages=stages or [],
-            ctx=ctx,
-            cache=cache,
-        )
+
+        ctx = RunContext(**config)
+        cache = FileCache(pdf_path) if enable_cache else None
+
+        return Pipeline(stages=stages or [], ctx=ctx, cache=cache)
 
 
-def compute_stage_meta(
-    stage: PipelineStage,
-    params: dict,
-) -> dict[str, Any]:
+def compute_stage_meta(stage: PipelineStage, params: Any) -> dict[str, Any]:
+    """Generates a metadata fingerprint for cache validation."""
     cls = type(stage)
     return {
         "params_fp": fingerprint(params),

@@ -1,4 +1,10 @@
-"""Artifacts are Pydantic models that represent the output of a pipeline stage."""
+"""
+Pipeline Artifact Management.
+
+This module handles the lifecycle of Pipeline artifacts, providing utilities for
+serialization, file-based caching with metadata validation, and incremental
+streaming (JSONL).
+"""
 
 from contextlib import contextmanager
 import hashlib
@@ -19,42 +25,53 @@ from dbm import error as dbm_error
 from pydantic import BaseModel
 from pipeline.logging import logger
 
+# Type alias for clarity; Artifacts are essentially Pydantic models
 Artifact = BaseModel
 
 _T = TypeVar("_T", bound=Artifact)
 
 
 def save_artifact(artifact: Artifact, path: Path) -> None:
+    """Serializes an artifact to a JSON file, creating parent directories if needed."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(artifact.model_dump_json(), encoding="utf-8")
 
 
 def load_artifact(path: Path, cls: Type[_T]) -> _T:
+    """Loads and validates an artifact from a JSON file."""
     return cls.model_validate_json(path.read_text(encoding="utf-8"))
 
 
-# ----------------------------------------
-# Artifact caching
-# ----------------------------------------
+# -----------------------------------------------------------------------------
+# Artifact Caching
+# -----------------------------------------------------------------------------
 
 
 class FileCache:
-    """File-based cache for JSON-serializable artifacts associated with a PDF."""
+    """
+    Persistent file-based cache for JSON-serializable artifacts.
 
-    def __init__(self, pdf_path: str | Path):
-        self.cache_path = Path(pdf_path).with_suffix(".cache")
+    Uses a shelf database to store artifacts associated with a specific PDF
+    processing run, supporting metadata-based invalidation (fingerprinting).
+    """
+
+    def __init__(self, source_path: str | Path):
+        """Initializes cache path based on the input document path."""
+        self.cache_path = Path(source_path).with_suffix(".cache")
 
     @contextmanager
-    def _open_cache(self, flag: str = "c") -> Iterator[shelve.Shelf]:
+    def _open_database(self, flag: str = "c") -> Iterator[shelve.Shelf]:
+        """Manages the lifecycle of the underlying DBM database."""
         try:
             self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-            # Because of how shelve declares its open function, we have to explicitly cast the flag to _TFlags
-            # otherwise mypy will complain
-            f = cast(Literal["r", "w", "c", "n", "rf", "wf"], flag)
-            with shelve.open(self.cache_path.as_posix(), flag=f) as db:
+            # Cast for type-checker compatibility with shelve.open flags
+            shelf_flag = cast(Literal["r", "w", "c", "n"], flag)
+            with shelve.open(self.cache_path.as_posix(), flag=shelf_flag) as db:
                 yield db
         except dbm_error as e:
-            raise RuntimeError(f"Cannot open cache at {self.cache_path}: {e}") from e
+            raise RuntimeError(
+                f"Failed to access cache at {self.cache_path}: {e}"
+            ) from e
 
     def save(
         self,
@@ -64,13 +81,16 @@ class FileCache:
         override: bool = False,
         meta: Optional[dict[str, Any]] = None,
     ) -> None:
-        cache_key = self._cache_key(stage, type(artifact))
-        payload = {"artifact_json": artifact.model_dump_json(), "meta": meta or {}}
+        """Stores an artifact in the cache under a stage-specific key."""
+        key = self._generate_key(stage, type(artifact))
+        entry = {"artifact_json": artifact.model_dump_json(), "meta": meta or {}}
 
-        with self._open_cache("c") as db:
-            if not override and cache_key in db:
-                raise KeyError(f"Cache entry already exists: {cache_key}")
-            db[cache_key] = payload
+        with self._open_database("c") as db:
+            if not override and key in db:
+                raise KeyError(
+                    f"Cache collision: {key} already exists. Use override=True."
+                )
+            db[key] = entry
 
     def load(
         self,
@@ -79,96 +99,111 @@ class FileCache:
         *,
         expected_meta: Optional[dict[str, Any]] = None,
     ) -> _T:
-        cache_key = self._cache_key(stage, artifact_type)
+        """
+        Retrieves an artifact from cache.
+        Validates metadata (e.g., fingerprints) if expected_meta is provided.
+        """
+        key = self._generate_key(stage, artifact_type)
 
-        with self._open_cache("c") as db:
-            raw = db[cache_key]
+        with self._open_database("r") as db:
+            data = db[key]
 
-        # Backward-compatible: old entries stored as JSON string
-        if isinstance(raw, str):
-            artifact_json = raw
-            meta = {}
+        # Handle backward compatibility and extract components
+        if isinstance(data, str):
+            json_str, meta = data, {}
         else:
-            artifact_json = raw.get("artifact_json")
-            meta = raw.get("meta", {})
+            json_str = data.get("artifact_json")
+            meta = data.get("meta", {})
 
         if expected_meta is not None and meta != expected_meta:
-            raise KeyError(f"Cache metadata mismatch for {cache_key}")
+            raise KeyError(f"Cache invalid: Metadata mismatch for {key}")
 
-        return artifact_type.model_validate_json(artifact_json)
+        return artifact_type.model_validate_json(json_str)
 
     def invalidate(self, stage_name: Optional[str] = None) -> None:
-        logger.debug(
-            f"Invalidating cache {'for stage ' + stage_name if stage_name else 'entirely'}"
-        )
-        with self._open_cache("c") as db:
+        """Clears the cache for a specific stage or the entire document."""
+        action = f"for stage '{stage_name}'" if stage_name else "entirely"
+        logger.debug(f"Invalidating cache {action} at {self.cache_path}")
+
+        with self._open_database("w") as db:
             if stage_name is None:
                 db.clear()
-                return
-
-            prefix = f"{stage_name}::"
-            for key in list(db.keys()):
-                if str(key).startswith(prefix):
-                    del db[key]
+            else:
+                prefix = f"{stage_name}::"
+                keys_to_delete = [k for k in db.keys() if str(k).startswith(prefix)]
+                for k in keys_to_delete:
+                    del db[k]
 
     @staticmethod
-    def _cache_key(stage: str, artifact_cls: type[_T]) -> str:
+    def _generate_key(stage: str, artifact_cls: type) -> str:
+        """Creates a unique string key for a stage/artifact pair."""
         return f"{stage}::{artifact_cls.__name__}"
 
 
-# TODO move to utils.py?
 def fingerprint(data: Any) -> str:
     """
-    Empreinte stable (best-effort) pour invalider le cache quand params/modèle changent.
-    - JSON trié
-    - fallback sur str() pour les objets non sérialisables
+    Generates a stable 16-character SHA256 hash of the input data.
+    Used to invalidate cache when parameters or models change.
     """
-    payload = json.dumps(
+    serialized = json.dumps(
         data,
         sort_keys=True,
         ensure_ascii=False,
-        default=str,
+        default=str,  # Fallback for non-serializable objects
     ).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()[:16]
+    return hashlib.sha256(serialized).hexdigest()[:16]
 
 
-# -----------
-# Streaming
-# -----------
+# -----------------------------------------------------------------------------
+# Streaming Utilities
+# -----------------------------------------------------------------------------
 
 
 class JSONLWriter:
-    """Writes JSON events incrementally (one JSON object per line)."""
+    """
+    Incremental writer for JSON Lines format.
 
-    def __init__(self, path: Path, *, flush: bool = True):
-        self._path = path
-        self._flush = flush
-        self._fp: IO[str] | None = None
-        self._has_written = False
+    Ensures artifacts are written one per line to disk, allowing for
+    memory-efficient streaming of large datasets.
+    """
 
-    def _ensure_open(self) -> None:
-        if self._fp is None:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            self._fp = self._path.open("w", encoding="utf-8")
+    def __init__(self, export_path: Path, *, auto_flush: bool = True):
+        self.path = export_path
+        self._auto_flush = auto_flush
+        self._stream: Optional[IO[str]] = None
+        self._record_count = 0
 
-    def write(self, event: Artifact) -> None:
-        self._ensure_open()
-        assert self._fp is not None
-        self._fp.write(event.model_dump_json() + "\n")
-        if self._flush:
-            self._fp.flush()
-        self._has_written = True
+    def _init_stream(self) -> None:
+        """Opens the file handle lazily upon the first write operation."""
+        if self._stream is None:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._stream = self.path.open("w", encoding="utf-8")
+
+    def write(self, artifact: Artifact) -> None:
+        """Writes a single artifact to the stream as a JSON line."""
+        self._init_stream()
+        # MyPy check: _init_stream ensures self._stream is not None
+        cast(IO[str], self._stream).write(artifact.model_dump_json() + "\n")
+
+        if self._auto_flush:
+            self._stream.flush()  # type: ignore
+        self._record_count += 1
 
     def close(self) -> None:
-        if self._fp is not None:
-            self._fp.close()
-        elif self._path.exists():
-            self._path.unlink()
+        """Closes the stream and cleans up empty files."""
+        if self._stream is not None:
+            self._stream.close()
+            self._stream = None
+        elif self.path.exists() and self._record_count == 0:
+            # Clean up if file was touched but no data written
+            self.path.unlink()
 
     @property
-    def has_written(self) -> bool:
-        return self._has_written
+    def has_content(self) -> bool:
+        """Returns True if at least one record has been written."""
+        return self._record_count > 0
 
 
 def open_jsonl(path: Path) -> JSONLWriter:
+    """Factory function to create a new JSONLWriter."""
     return JSONLWriter(path)
