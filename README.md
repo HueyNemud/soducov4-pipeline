@@ -151,21 +151,32 @@ The application accepts three URL parameters:
 
 ---
 
-## Example results
+## Examples
 
-### **1797 — Almanach du commerce de la ville de Paris**, Duverneuil & La Tynna
+### 1797 — Almanach du commerce de la ville de Paris. Duverneuil & La Tynna
 
-* [List of merchants, traders, and brokers of Paris](https://hueynemud.github.io/directory-explorer/?entitiesUrl=https://files.catbox.moe/ev9iv0.json&manifestUrl=https://gallica.bnf.fr/iiif/ark%3A%2F12148%2Fbd6t58275556/manifest.json&pageOffset=21)
-* [Other specialized lists: bankers, physicians, etc.](https://hueynemud.github.io/directory-explorer/?entitiesUrl=https://files.catbox.moe/b10mot.json&manifestUrl=https://gallica.bnf.fr/iiif/ark%3A%2F12148%2Fbd6t58275556/manifest.json&pageOffset=295)
-
----
-
-### **1807 — Almanach du commerce de Paris**, Duverneuil & La Tynna
-
-* [Alphabetical list of manufacturers, merchants, bankers, brokers, and tradespeople of Paris](https://hueynemud.github.io/directory-explorer/?entitiesUrl=https://files.catbox.moe/a8cjvs.json&manifestUrl=https://gallica.bnf.fr/iiif/ark%3A%2F12148%2Fbpt6k124557p/manifest.json&pageOffset=119)
+* [Liste des négocians, marchands et courtiers de la ville de Paris](https://hueynemud.github.io/directory-explorer/?entitiesUrl=https://files.catbox.moe/ev9iv0.json&manifestUrl=https://gallica.bnf.fr/iiif/ark%3A%2F12148%2Fbd6t58275556/manifest.json&pageOffset=21)
+* [(Listes particulières suivantes)](https://hueynemud.github.io/directory-explorer/?entitiesUrl=https://files.catbox.moe/b10mot.json&manifestUrl=https://gallica.bnf.fr/iiif/ark%3A%2F12148%2Fbd6t58275556/manifest.json&pageOffset=295)
 
 ---
 
-### **1845 — Annuaire général du commerce**, Firmin-Didot frères
+### 1807 — Almanach du commerce de Paris, des départements de l'empire français et des principales villes du monde. Duverneuil & La Tynna
 
-* [General list of addresses in Paris and major establishments](https://hueynemud.github.io/directory-explorer/?entitiesUrl=https://files.catbox.moe/1vimup.json&manifestUrl=https://gallica.bnf.fr/iiif/ark%3A%2F12148%2Fbpt6k6292987t/manifest.json&pageOffset=352)
+* [Listes particulières, par ordre alphabétique, des fabricans, négocians, banquiers, agens de change, commerçans, marchands de tous états, de Paris](https://hueynemud.github.io/directory-explorer/?entitiesUrl=https://files.catbox.moe/a8cjvs.json&manifestUrl=https://gallica.bnf.fr/iiif/ark%3A%2F12148%2Fbpt6k124557p/manifest.json&pageOffset=119)
+
+---
+
+### 1845 — Annuaire général du commerce, Firmin-Didot frères
+
+* [Liste générale des adresses de Paris, et des principaux établissement de cette capitale.](https://hueynemud.github.io/directory-explorer/?entitiesUrl=https://files.catbox.moe/1vimup.json&manifestUrl=https://gallica.bnf.fr/iiif/ark%3A%2F12148%2Fbpt6k6292987t/manifest.json&pageOffset=352)
+
+---
+
+### 1903 — Annuaire-almanach du commerce de l'industrie, de la magistrature et de l'administration ou almanach des 1.500.000 adresses de Paris, des départements, des colonies et de l'étranger. Firmin-Didot frères
+
+* [Liste alphabétique des commerçants et industriels de la ville de Paris](https://hueynemud.github.io/directory-explorer/?entitiesUrl=https://files.catbox.moe/5e2czw.json&manifestUrl=https://gallica.bnf.fr/iiif/ark%3A%2F12148%2Fbpt6k3208950j/manifest.json&pageOffset=36)
+---
+
+### 1926 — Annuaire-almanach du commerce de l'industrie, de la magistrature et de l'administration ou almanach des 1.500.000 adresses de Paris, des départements, des colonies et de l'étranger. Firmin-Didot frères
+
+* [Liste alphabétique des commerçants, industriels, professions libérales, etc. de la région Parisienne (Seine – Seine-&-Oise – Seine-&-Marne (partie](https://hueynemud.github.io/directory-explorer/?entitiesUrl=https://files.catbox.moe/9lpsbc.json&manifestUrl=https://gallica.bnf.fr/iiif/ark%3A%2F12148%2Fbpt6k53243951/manifest.json&pageOffset=409)
