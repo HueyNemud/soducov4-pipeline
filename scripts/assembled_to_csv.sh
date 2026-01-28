@@ -4,17 +4,15 @@ set -euo pipefail
 [[ $# -ne 1 ]] && { echo "Usage: $0 <fichier.json>" >&2; exit 1; }
 
 # En-tête CSV
-echo '"id","cat","alignment","text","name","activity","label","number","complement","raw_text"'
+echo '"id","cat","alignment","text","name","activity","label","number","complement","raw_text","pages","lines"'
 
 jq -r '
-  [path(..)|select(length==2)] as $paths 
-  | to_entries[] 
+  .items | to_entries[] 
   | .key as $id 
-  | .value.items[] 
-  | . as $root
+  | .value as $root
   | (
-      if .cat == "ent" and (.addresses | type == "array" and length > 0) 
-      then .addresses[] 
+      if $root.cat == "ent" and ($root.addresses | type == "array" and length > 0) 
+      then $root.addresses[] 
       else {label: null, number: null, complement: null} 
       end
     ) as $addr
@@ -28,7 +26,15 @@ jq -r '
       $addr.label,
       $addr.number,
       $addr.complement,
-      $root.raw_text
+      $root.raw_text,
+      (
+        $root.lines_resolved // [] 
+        | if type == "array" then map(.page) | unique | join(";") else "" end
+      ),
+      (
+        $root.lines_resolved // [] 
+        | if type == "array" then map(.line) | unique | join(";") else "" end
+      )
     ]
   | @csv
 ' "$1"
